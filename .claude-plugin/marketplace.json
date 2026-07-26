@@ -1,5 +1,6 @@
 {
   "name": "qna-marketplace",
+  "description": "Home of qna — turn everything still undecided in a Claude Code conversation into clickable questions.",
   "owner": {
     "name": "jinhuang712",
     "url": "https://github.com/jinhuang712"
