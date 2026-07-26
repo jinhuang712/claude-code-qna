@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Read the Claude Code transcript for this session.
+
+Kept as its own script so the dependency on the transcript's internal JSONL
+shape lives in exactly one file. If the format ever changes, this is the only
+thing that needs fixing.
+
+    qna-transcript --session <id> --grep "<words>"
+
+      exit 0   the words appear in the conversation
+      exit 1   the transcript is readable, the words are not in it
+      exit 2   the transcript cannot be read (missing, moved, format changed)
+
+Callers must treat 1 and 2 differently: 1 means the quote was invented,
+2 means we simply could not check.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+EXIT_FOUND = 0
+EXIT_ABSENT = 1
+EXIT_UNREADABLE = 2
+
+
+def normalize(s):
+    return re.sub(r"\s+", "", s)
+
+
+def transcript_text(path):
+    chunks = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            msg = d.get("message") or {}
+            content = msg.get("content")
+            if isinstance(content, str):
+                chunks.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        chunks.append(block.get("text", ""))
+    return "\n".join(chunks)
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--grep", required=True)
+    ap.add_argument("--print-path", action="store_true")
+    args = ap.parse_args()
+
+    meta = qna_lib.load_meta(args.session, args.project)
+    path = meta.get("transcript_path")
+    if args.print_path:
+        print(path or "")
+
+    if not path or not os.path.exists(path):
+        return EXIT_UNREADABLE
+
+    try:
+        text = transcript_text(path)
+    except Exception:
+        return EXIT_UNREADABLE
+
+    if not text:
+        return EXIT_UNREADABLE
+
+    return EXIT_FOUND if normalize(args.grep) in normalize(text) else EXIT_ABSENT
+
+
+if __name__ == "__main__":
+    sys.exit(main())

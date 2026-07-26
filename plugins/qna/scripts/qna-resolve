@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Close a parked decision the moment the conversation settles it.
+
+    qna-resolve <id> --session <id> --result "what was decided"
+                     --quote "the user's own words"
+
+--quote is required on purpose. Settling something in the moment is far more
+accurate than reconstructing it later at /qna:ask time, and requiring real
+words is a much higher bar than requiring a judgement call.
+
+Being asked about something already answered is visible and costs a second.
+Silently archiving something the user never decided is invisible and costs
+them the decision. So: no quote, no archive.
+"""
+
+import argparse
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+NO_QUOTE = (
+    "Refused: no quote. If you cannot quote what the user actually said, it is "
+    "not settled — leave it in the queue for /qna:ask."
+)
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("id", type=int)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--result", required=True)
+    ap.add_argument("--quote", required=True)
+    args = ap.parse_args()
+
+    if not args.quote.strip():
+        print(NO_QUOTE, file=sys.stderr)
+        return 1
+
+    path = qna_lib.pending_path(args.session, args.project, create=False)
+    entries = qna_lib.read_entries(path)
+    match = next((e for e in entries if e["id"] == args.id), None)
+    if match is None:
+        ids = ", ".join(f"#{e['id']}" for e in entries if not e["done"]) or "none"
+        print(f"Refused: no entry #{args.id}. Currently open: {ids}", file=sys.stderr)
+        return 1
+    if match["done"]:
+        print(f"Refused: #{args.id} is already resolved.", file=sys.stderr)
+        return 1
+
+    lines = open(path, encoding="utf-8").read().split("\n")
+    out = []
+    inside = False
+    head_re = re.compile(rf"^- \[ \] #{args.id} · ")
+    for line in lines:
+        if head_re.match(line):
+            out.append(line.replace("- [ ] ", "- [x] ", 1))
+            inside = True
+            continue
+        # Insert straight after the last field line, before the blank
+        # separator, so the result stays visually attached to its entry.
+        if inside and not line.startswith("  - "):
+            out.append(f"  - Result: {args.result}")
+            out.append(f"  - Quote: {args.quote}")
+            inside = False
+        out.append(line)
+    if inside:
+        out.append(f"  - Result: {args.result}")
+        out.append(f"  - Quote: {args.quote}")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out))
+
+    print(f"Resolved #{args.id}.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

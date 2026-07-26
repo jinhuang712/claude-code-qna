@@ -1,0 +1,14 @@
+{
+  "name": "qna-marketplace",
+  "owner": {
+    "name": "jinhuang712",
+    "url": "https://github.com/jinhuang712"
+  },
+  "plugins": [
+    {
+      "name": "qna",
+      "source": "./plugins/qna",
+      "description": "Turn everything still undecided in a conversation into clickable questions."
+    }
+  ]
+}

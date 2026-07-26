@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Park one open decision.
+
+    qna-add --session <id>
+            --title "one line"
+            --chose "what you went with"
+            --alt "an alternative" --alt "another one"
+            --why  "the tradeoff that made you pick it"
+            --where "src/foo.py:12"  |  "something actually said"
+            [--deferred-by-user]
+
+The refusals below are the point of this script. Deciding whether something is
+a real decision cannot be enforced by prose, so it is enforced by gates the
+caller has to get through: name two genuine alternatives, and point at
+somewhere the thing actually exists.
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+NEED_ALTS = (
+    "Refused: need at least 2 alternatives. If you cannot name two a competent "
+    "engineer might genuinely prefer, this is an implementation detail, not a "
+    "decision. Do not record it."
+)
+BAD_WHERE = (
+    "Refused: --where must be either a real file:line or something actually "
+    "said in this conversation. If you can point at neither, you are not "
+    "recording a decision that happened."
+)
+NOT_SAID = (
+    "Refused: those words do not appear in this conversation. Quote what was "
+    "actually said, or point at a real file:line."
+)
+
+FILE_LINE_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+)$")
+
+
+def resolve_where(where, session, project):
+    """Returns (kind, verified) or raises SystemExit with a refusal.
+
+    kind is "code" or "said"; verified is "yes" or "unverified".
+    """
+    m = FILE_LINE_RE.match(where.strip())
+    if m:
+        candidate = m.group("path")
+        root = qna_lib.project_dir(project)
+        for p in (candidate, os.path.join(root, candidate)):
+            if os.path.exists(p):
+                return "code", "yes"
+        # Looks like a path but points nowhere: fall through and try to treat it
+        # as a spoken phrase before refusing.
+
+    rc = subprocess.call(
+        [
+            sys.executable,
+            os.path.join(HERE, "qna-transcript"),
+            "--session",
+            session,
+            "--grep",
+            where,
+        ]
+        + (["--project", project] if project else [])
+    )
+    if rc == 0:
+        return "said", "yes"
+    if rc == 2:
+        # Transcript unreadable. Record anyway and flag it: an internal format
+        # change must not stop the tool from working.
+        return "said", "unverified"
+    sys.exit(refuse(NOT_SAID if not m else BAD_WHERE))
+
+
+def refuse(msg):
+    print(msg, file=sys.stderr)
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--title", required=True)
+    ap.add_argument("--chose", required=True)
+    ap.add_argument("--alt", action="append", default=[])
+    ap.add_argument("--why", required=True)
+    ap.add_argument("--where", required=True)
+    ap.add_argument("--deferred-by-user", action="store_true")
+    args = ap.parse_args()
+
+    alts = [a.strip() for a in args.alt if a.strip()]
+    # Chose becomes the first option and each alternative becomes another, so
+    # two alternatives is what makes a three-option question possible.
+    if len(alts) < 2:
+        return refuse(NEED_ALTS)
+
+    if not args.where.strip():
+        return refuse(BAD_WHERE)
+
+    _, verified = resolve_where(args.where, args.session, args.project)
+
+    path = qna_lib.pending_path(args.session, args.project)
+    entry_id = qna_lib.next_id(path)
+    qna_lib.append_entry(
+        path,
+        qna_lib.render_entry(
+            entry_id,
+            args.title,
+            args.chose,
+            alts,
+            args.why,
+            args.where,
+            "user-deferred" if args.deferred_by_user else "agent",
+            verified,
+        ),
+    )
+    suffix = "" if verified == "yes" else " (unverified: transcript unreadable)"
+    print(f"Recorded #{entry_id}.{suffix}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
