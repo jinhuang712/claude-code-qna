@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Print the conversation /qna:ask has not scanned yet.
+
+    qna-scan --session <id> --project <abs> --transcript <abs>
+    qna-scan --session <id> --project <abs> --transcript <abs> --mark
+
+Two jobs, both of which have to be a script rather than a judgement call:
+
+  * Filter.  A working session's transcript is mostly tool calls, tool results
+    and thinking — 97% of the bytes in the session that prompted this script.
+    Only user messages and assistant prose are conversation. Filtering is the
+    difference between a file that cannot be read at all and one that can.
+
+  * Window.  The watermark in .meta says where the last scan stopped. Reading
+    from there is the only way a second /qna:ask in a long session costs less
+    than the first. The model never computes the boundary and never sees a
+    timestamp it has to reason about: it runs this, it reads what comes back.
+
+--mark advances the watermark, and is the last thing /qna:ask does. Advancing
+it earlier would mean an interrupted run silently skipped a stretch of
+conversation on the next pass, which is the expensive kind of failure: nothing
+reports it and the material is simply never looked at again.
+
+Resume is by uuid, with the timestamp as fallback. A uuid is exact; timestamps
+repeat and clocks move. If neither resolves, the whole conversation is printed
+rather than a guessed window — over-reading is visible and cheap, under-reading
+is neither.
+
+  exit 0   printed a window (possibly empty)
+  exit 2   the transcript cannot be read (missing, moved, format changed)
+"""
+
+import argparse
+import os
+import signal
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+# The output is long by nature and will get piped through head or grep. Die
+# quietly when the reader goes away instead of spewing a traceback that looks
+# like the transcript is broken.
+try:
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+except (AttributeError, ValueError):
+    pass
+
+EXIT_OK = 0
+EXIT_UNREADABLE = 2
+
+# Enough for a long day of conversation, small enough to stay affordable. On
+# overflow the newest text is kept and the drop is reported: a cap that stays
+# quiet reads as "you have seen everything".
+MAX_CHARS = 200_000
+
+
+def resolve_window(turns, mark_uuid, mark_ts):
+    """Turns after the watermark, plus how the boundary was found."""
+    if mark_uuid:
+        for i, t in enumerate(turns):
+            if t["uuid"] == mark_uuid:
+                return turns[i + 1:], "uuid"
+    if mark_ts:
+        after = [t for t in turns if t["ts"] > mark_ts]
+        if len(after) != len(turns):
+            return after, "timestamp"
+    return turns, "everything"
+
+
+def render(turns):
+    out = []
+    for t in turns:
+        tag = " · context compaction" if t["compacted"] else ""
+        out.append("[{}] {}{}\n{}".format(t["ts"], t["role"], tag, t["text"].strip()))
+    return "\n\n".join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--transcript")
+    ap.add_argument("--mark", action="store_true",
+                    help="record the newest turn as scanned; run this last")
+    args = ap.parse_args()
+
+    meta = qna_lib.load_meta(args.session, args.project)
+    path = args.transcript or meta.get("transcript_path")
+    if not path or not os.path.exists(path):
+        print("qna-scan: transcript unreadable — scan the conversation in your "
+              "context instead.", file=sys.stderr)
+        return EXIT_UNREADABLE
+
+    try:
+        turns = list(qna_lib.iter_turns(path))
+    except Exception:
+        print("qna-scan: transcript unreadable — scan the conversation in your "
+              "context instead.", file=sys.stderr)
+        return EXIT_UNREADABLE
+
+    if args.mark:
+        if not turns:
+            print("qna-scan: nothing to mark, transcript held no conversation.")
+            return EXIT_OK
+        last = turns[-1]
+        meta["scan_uuid"] = last["uuid"]
+        meta["scan_ts"] = last["ts"]
+        qna_lib.save_meta(args.session, meta, args.project)
+        print("qna-scan: watermark at {} — the next scan starts after this "
+              "point.".format(last["ts"]))
+        return EXIT_OK
+
+    window, how = resolve_window(turns, meta.get("scan_uuid"), meta.get("scan_ts"))
+
+    if not window:
+        print("qna-scan: nothing new since {}. The conversation in your context "
+              "is the only source this run.".format(meta.get("scan_ts")))
+        return EXIT_OK
+
+    body = render(window)
+    dropped = 0
+    if len(body) > MAX_CHARS:
+        keep = []
+        size = 0
+        for t in reversed(window):
+            piece = len(t["text"]) + 40
+            if size + piece > MAX_CHARS:
+                dropped += 1
+                continue
+            size += piece
+            keep.append(t)
+        keep.reverse()
+        body = render(keep)
+        window = keep
+
+    head = ["qna-scan · {} turns · {:.1f} KB".format(len(window), len(body) / 1024)]
+    if how == "everything":
+        head.append("no watermark yet — this is the whole conversation")
+    else:
+        head.append("window since {} (resumed by {})".format(meta.get("scan_ts"), how))
+    if any(t["compacted"] for t in window):
+        head.append("this window crosses a context compaction; the summary entry "
+                    "below is condensed, not verbatim")
+    if dropped:
+        head.append("{} older turns dropped to stay under {} KB — they were NOT "
+                    "scanned".format(dropped, MAX_CHARS // 1024))
+
+    print("\n  ".join(head))
+    print()
+    print(body)
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

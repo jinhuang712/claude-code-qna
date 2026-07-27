@@ -1,7 +1,7 @@
 {
   "name": "qna",
   "displayName": "qna",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Turn everything still undecided in a conversation into clickable questions.",
   "author": {
     "name": "jinhuang712"
@@ -9,5 +9,10 @@
   "homepage": "https://github.com/jinhuang712/claude-code-qna",
   "repository": "https://github.com/jinhuang712/claude-code-qna",
   "license": "MIT",
-  "keywords": ["decisions", "questions", "workflow", "review"]
+  "keywords": [
+    "decisions",
+    "questions",
+    "workflow",
+    "review"
+  ]
 }

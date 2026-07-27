@@ -7,7 +7,8 @@ Storage layout, per project:
                                        to git without touching the project's
                                        own .gitignore
     <project>/.qna/<session>.md        pending entries, append-only
-    <project>/.qna/<session>.meta      json, holds transcript_path
+    <project>/.qna/<session>.meta      json: transcript_path, last reported
+                                       count, and the scan watermark
     <project>/.qna/<session>.active    marker written while /qna:ask runs
 """
 
@@ -72,8 +73,8 @@ def qna_dir_exists(project=None):
 
     Hooks run in every project and must not leave a trace in the ones that
     never used the tool. Anything that only reads or updates bookkeeping checks
-    this first; only qna-add and qna-mark are allowed to bring the directory
-    into being.
+    this first; the directory comes into being only on a deliberate act —
+    qna-add, qna-mark --on, or qna-scan --mark.
     """
     return os.path.isdir(os.path.join(project_dir(project), ".qna"))
 
@@ -179,6 +180,55 @@ def load_meta(session, project=None):
 def save_meta(session, data, project=None):
     with open(meta_path(session, project), "w", encoding="utf-8") as f:
         json.dump(data, f)
+
+
+def iter_turns(path):
+    """Yield the conversation out of a Claude Code transcript, oldest first.
+
+    Everything that knows the transcript's internal JSONL shape lives here, so a
+    format change has exactly one place to be fixed. Each turn is a dict:
+
+        {"uuid": str, "ts": str, "role": "user"|"assistant",
+         "text": str, "compacted": bool}
+
+    Only text survives. Tool calls, tool results and thinking blocks are 97% of
+    the file by volume in a working session and none of it is conversation; a
+    scan that carried them would be unaffordable long before it was useful.
+    Sidechain entries are a subagent talking to itself, not this conversation.
+    """
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") not in ("user", "assistant"):
+                continue
+            if d.get("isMeta") or d.get("isSidechain"):
+                continue
+            content = (d.get("message") or {}).get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                text = "\n".join(
+                    b.get("text", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            else:
+                continue
+            if not text.strip():
+                continue
+            yield {
+                "uuid": d.get("uuid") or "",
+                "ts": d.get("timestamp") or "",
+                "role": d["type"],
+                "text": text,
+                "compacted": bool(d.get("isCompactSummary")),
+            }
 
 
 def marker_is_live(session, project=None):

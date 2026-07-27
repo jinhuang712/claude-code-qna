@@ -2,7 +2,7 @@
 
 状态：v1 已定稿并实装，无待审项。最后一次与实装对账 2026-07-27 15:20:11（北京时间，下同）。
 
-代码侧的机械保证由 `tests/smoke.sh` 逐条断言（51 条）：选项下限与上限、preview 必填、`--where` 必须落到真实 file:line 或原话、归档必须带原话、四条命令的路径全注入、marker 的生效范围与自然过期、目录懒建。prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
+代码侧的机械保证由 `tests/smoke.sh` 逐条断言（77 条）：选项下限与上限、preview 必填、`--where` 必须落到真实 file:line 或原话、归档必须带原话、四条命令的路径全注入、marker 的生效范围与自然过期、目录懒建。prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
 
 **已知缺口一处**：扫描侧的三道过滤（备选 / 代价 / 意外）纯靠 prompt，没有脚本兜底。记录侧一切经 `qna-add`，硬闸挡得住；扫描侧直接产出题目，判错只能靠用户驳回。这是 v1 明确接受的召回-精度折中，不是待办。
 
@@ -186,7 +186,7 @@ argument-hint: [可选：只清理某个话题，如「架构」]
 
 ### 我们提供的脚本
 
-四个脚本，**都不许模型自己拼路径**——`--session`、`--project`、`--transcript` 全由 `SessionStart` 注入在命令行里（理由见第九节「一切走脚本」）。
+五个脚本，**都不许模型自己拼路径**——`--session`、`--project`、`--transcript` 全由 `SessionStart` 注入在命令行里（理由见第九节「一切走脚本」）。
 
 ```
 qna-add   --session <id> --project <abs> --transcript <abs>   ← 注入，模型照抄
@@ -222,6 +222,13 @@ qna-mark    --session <id> --project <abs>  --on | --off | --status
     --on      建 .qna/<sid>.active（顺带 mkdir -p），开启 PreToolUse 校验器
     --off     删标记，幂等（异常中断后再调不报错）
     --status  报当前开关状态
+
+
+qna-scan    --session <id> --project <abs> --transcript <abs>  [--mark]
+
+    无参      打印「上次扫描之后」的对话：过滤 + 开窗，见下
+    --mark    把最新一条记成已扫，/qna:ask 的最后一个动作
+    exit 2    transcript 读不了（模型改为扫自己的上下文）
 ```
 
 **`--alt` 下限是 2 不是 1。** 条目映射为 `Chose` → 第一个选项、`Alternatives` → 其余选项，下限 1 只能产出 2 个选项，直接违反 D12「每题至少 3 个」。下限 2 才保得住。
@@ -240,9 +247,11 @@ qna-mark    --session <id> --project <abs>  --on | --off | --status
 
 **对话落点比代码落点更严**：行号可以编，一句真说过的话编不出来。
 
-### `qna-transcript` — transcript 读取器
+### transcript 的两个读者
 
-单独成脚本，不塞进 `qna-add`。理由：格式依赖被隔离在一个文件里，官方哪天改了 jsonl 结构只需修这一处。
+jsonl 的格式依赖收在 `qna_lib.iter_turns` 一处——官方哪天改了结构只需修这一个函数。它按顺序吐出对话轮次（`uuid` / `ts` / `role` / `text` / `compacted`），**只留文本**：tool 调用、tool 结果、thinking、sidechain、`isMeta` 全丢。两个脚本共用它，一个做校验，一个做扫描。
+
+#### `qna-transcript` — 原话校验器
 
 ```
 qna-transcript --grep "<原话>"
@@ -264,11 +273,25 @@ qna-transcript --grep "<原话>"
 
 **为什么不落 `.meta` 就好**：落盘要先建 `.qna/`，而这个 hook 在每个项目都跑——于是每个开过会话的项目里都凭空多出一个目录，哪怕它从没记过任何条目（实测：装上一小时，两个项目全中）。路径走命令行，`.qna/` 就只在**第一次真正记录成功后**才出现。`.meta` 仍然写，但只在目录已存在时写，且只承担两件事：`qna-transcript` 手动调用时的回退、`Stop` hook 的 `reported_count`。
 
-**怎么匹配**：逐行 `json.loads`，取 `message.content` 里的文本块拼起来，归一化空白后做子串匹配。
+**怎么匹配**：拿 `iter_turns` 的全部文本拼起来，归一化空白后做子串匹配。
 
 **已知限制**：当前这一轮尚未结束的内容可能还没落盘。但验证的是**用户说过的话**，用户消息在收到时即写入，实际不受影响。
 
-**v1 只做验证，不做 compact 恢复。** 同一个脚本理论上能把压缩掉的早期对话捞回来给 `/qna:ask` 扫描，但那等于把刚被压缩的文本又灌回上下文，一次 `ask` 的开销可能比整个流程还大。`/qna:ask` 碰到 compact 过的会话，仍然只在总览顶部注明「早期对话已压缩，可能有遗漏」。
+#### `qna-scan` — 扫描窗口
+
+`/qna:ask` 的对话来源。两件事都必须是脚本，不能是判断：
+
+**一、过滤。** 实测一个干活会话的 transcript：**总共 2916.7 KB，其中 97% 是 tool 调用、tool 结果、thinking 和元数据**，真正的一来一往只有 97 KB。滤掉噪音是「这文件根本打不开」和「一次扫描装得下」之间的差别——`iter_turns` 过完，59 KB 出头。
+
+**二、开窗。** `.meta` 里的水位线记着上次扫到哪，从那之后读起。长会话里第二次 `/qna:ask` 因此比第一次便宜。**续读锚点用 `uuid`，`timestamp` 兜底**：uuid 精确，时间戳会重复、时钟会跳。两个锚点都失效时**重读全部**，不猜边界——多读只是慢，少读是静默丢料。
+
+**水位线在 `/qna:ask` 的最后一步才前进**，不是第一步。提前推进意味着中途被打断的那一轮里，一整段对话在下次扫描时被跳过，而且没人报告——正是最贵的那类失败。
+
+**遇到 compact 会明说。** 窗口里含 `isCompactSummary` 时，脚本在头部标注「本窗口跨越一次上下文压缩，下面那条摘要是压缩过的，不是原文」，模型据此在总览里注明早期细节可能失真。
+
+**这一条推翻了 v1 原本的判断。** 当初写的是「不做 compact 恢复：等于把刚被压缩的文本又灌回上下文，一次 ask 的开销可能比整个流程还大」——那是没量过的估计。滤噪拿到 30 倍，全会话对话正文只有 59 KB，量出来之后这个反对理由不成立。
+
+**上限有，且会报。** 默认 200 KB，超了保留最新的部分，并在头部写明丢了多少轮**且这些轮没被扫过**。一个不吭声的截断读起来就是「你已经看全了」。
 
 **`--deferred-by-user` 标记协议 2 的来源**（你在对话里说"这个先记着"）。带此标记的条目：
 
@@ -311,8 +334,10 @@ PreToolUse   matcher: AskUserQuestion
 | 工具 | 用在哪 |
 |---|---|
 | `AskUserQuestion` | 全部提问。`preview` 用于格式/结构类选项 |
-| `Bash` | 调 `qna-add` / `qna-resolve` |
+| `Bash` | 调 `qna-add` / `qna-resolve` / `qna-mark` / `qna-scan` |
 | `Read` | `/qna:ask` 读 pending 文件 |
+
+扫描侧不用 `Read` 读 transcript：3 MB 的文件读不进来，`qna-scan` 过滤加开窗之后才是可读的量。
 
 ### 存储
 
@@ -442,9 +467,12 @@ PreToolUse   matcher: AskUserQuestion
            |  落盘位置  锚点由 SessionStart 定、注入进每条命令
            |            读侧 hook 按 session id 向上定位
            |            （模型不参与任何路径计算）
+           |  扫描窗口  滤掉 97% 的 tool 噪音 · 水位线由 qna-scan
+           |            读写，模型看不到也算不到边界
   ---------+-----------------------------------------------------
-  prompt   |  这算不算一个决策点          <- 只剩这两处
+  prompt   |  这算不算一个决策点          <- 只剩这三处
   保证     |  对账判断是否已解决
+           |  扫描侧那三道过滤（备选 / 代价 / 意外）
 ```
 
 两侧保证强度现在对等：记录侧编不出 `--alt` 过不去，提问侧给两个选项也过不去。
@@ -453,7 +481,7 @@ PreToolUse   matcher: AskUserQuestion
 
 ### v1 范围
 
-装：`/qna:ask` · `qna-add` · `qna-resolve` · `qna-transcript` · `qna-mark` · `SessionStart` hook · `PreToolUse` 校验器 · `Stop` hook（仅增量提醒）· `tests/smoke.sh`
+装：`/qna:ask` · `qna-add` · `qna-resolve` · `qna-transcript` · `qna-mark` · `qna-scan` · `SessionStart` hook · `PreToolUse` 校验器 · `Stop` hook（仅增量提醒）· `tests/smoke.sh`
 
 不装：transcript 的 compact 恢复 · 相似度去重 · 12 条上限 · 孤儿清理以外的维护逻辑
 
@@ -654,7 +682,7 @@ Resolved #3.
 
 ### 你敲 `/qna:ask`
 
-跑 `qna-mark --on`，`PreToolUse` 校验器随即生效。扫对话 + 读文件 → 合并去重 → 对账 → 分级 → 聚合 → 总览：
+跑 `qna-mark --on`，`PreToolUse` 校验器随即生效。跑 `qna-scan` 拿到「上次扫完之后」的对话（2916.7 KB 的 transcript 滤成 59 KB，再按水位线开窗）+ 读 pending 文件 → 合并去重 → 对账 → 分级 → 聚合 → 总览：
 
 **扫到 11 条，7 条要问。**
 
@@ -757,7 +785,7 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 
 最后那行**不是「无」**——G6.3 的措辞禁令。工具召回率只有四到六成，不能假装清干净了。
 
-然后**停住**。不追问，不动代码。跑 `qna-mark --off`，`PreToolUse` 校验器随之失效。文件里 11 条清空 9 条，剩 2 条（`#6` 失效已删、留下的是你没拍的那些）。
+然后**停住**。不追问，不动代码。扫描时发现、这轮仍未定的条目先经 `qna-add` 写进文件——它们从来没进过文件，而下一轮的窗口从这一刻之后开始，漏掉就是永久漏掉。最后两条命令：`qna-scan --mark` 推进水位线，`qna-mark --off` 撤下校验器。文件里 11 条清空 9 条，剩 2 条（`#6` 失效已删、留下的是你没拍的那些）。
 
 全程没让你打过一个字。
 
@@ -779,18 +807,19 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 │   ├── hooks/
 │   │   └── hooks.json          SessionStart + Stop + PreToolUse
 │   └── scripts/
-│       ├── qna_lib.py          共用：存储布局 · 锚点解析 · 条目解析
+│       ├── qna_lib.py          共用：存储 · 锚点 · 条目 · transcript 解析
 │       ├── session-start.py    定锚 · 注入协议+命令+清单 · 写 .meta · 清孤儿
 │       ├── stop-count.py       积压条数变化时报一次
 │       ├── pre-tool-use.py     校验 AskUserQuestion 入参
 │       ├── qna-add
 │       ├── qna-resolve
-│       ├── qna-transcript
+│       ├── qna-transcript      原话校验器（--where）
+│       ├── qna-scan            扫描窗口：过滤 + 水位线
 │       └── qna-mark            开关 PreToolUse 校验器
 ├── specs/
 │   └── design.md               本文档
 ├── tests/
-│   └── smoke.sh                51 条断言，无依赖
+│   └── smoke.sh                77 条断言，无依赖
 ├── reinstall.sh                卸载·清缓存·重装·校验（curl 一条即可装）
 └── README.md
 ```

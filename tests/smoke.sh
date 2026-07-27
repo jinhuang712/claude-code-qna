@@ -155,6 +155,7 @@ for want in \
   "qna-add --session $SID --project $PROJ" \
   "qna-resolve --session $SID --project $PROJ" \
   "qna-mark --session $SID --project $PROJ" \
+  "qna-scan --session $SID --project $PROJ --transcript $TRANSCRIPT" \
   "$PROJ/.qna/$SID.md"; do
   if printf '%s' "$INJECTED" | grep -qF -- "$want"; then
     pass "injects: $want"
@@ -302,6 +303,137 @@ hook "stays silent at zero" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "empty-session" "$PROJ")"
 hook "counts from a nested cwd" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "$SID" "$PROJ/src/deep/nested")"
+
+# --------------------------------------------------------------------- qna-scan
+printf '=== qna-scan\n'
+# A transcript shaped like a real one: conversation mixed with the tool traffic,
+# thinking and metadata that make up the overwhelming majority of the bytes.
+SCAN_PROJ="$WORK/scanproj"
+SCAN_SID="scan-session"
+SCAN_T="$WORK/scan.jsonl"
+mkdir -p "$SCAN_PROJ/.qna"
+NOISE=$(python3 -c 'print("TOOLNOISE" * 400)')
+{
+  printf '{"type":"user","uuid":"u1","timestamp":"2026-07-27T01:00:00Z","message":{"role":"user","content":[{"type":"text","text":"FIRST_HUMAN_LINE"}]}}\n'
+  printf '{"type":"assistant","uuid":"a1","timestamp":"2026-07-27T01:00:10Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"HIDDEN_THOUGHT"},{"type":"text","text":"FIRST_REPLY"}]}}\n'
+  printf '{"type":"user","uuid":"t1","timestamp":"2026-07-27T01:00:20Z","message":{"role":"user","content":[{"type":"tool_result","content":"%s"}]}}\n' "$NOISE"
+  printf '{"type":"assistant","uuid":"s1","timestamp":"2026-07-27T01:00:30Z","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"SUBAGENT_CHATTER"}]}}\n'
+  printf '{"type":"user","uuid":"m1","timestamp":"2026-07-27T01:00:40Z","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"META_LINE"}]}}\n'
+  printf '{"type":"system","uuid":"y1","timestamp":"2026-07-27T01:00:50Z","content":"SYSTEM_LINE"}\n'
+  printf '{"type":"user","uuid":"c1","timestamp":"2026-07-27T01:01:00Z","isCompactSummary":true,"message":{"role":"user","content":"SUMMARY_BODY"}}\n'
+  printf '{"type":"user","uuid":"u2","timestamp":"2026-07-27T01:02:00Z","message":{"role":"user","content":[{"type":"text","text":"SECOND_HUMAN_LINE"}]}}\n'
+} >"$SCAN_T"
+
+SCAN="$SCRIPTS/qna-scan --session $SCAN_SID --project $SCAN_PROJ --transcript $SCAN_T"
+OUT=$($SCAN 2>&1)
+
+# The filter is the whole reason this is affordable. Conversation in, everything
+# else out — and "everything else" is most of the file.
+for want in FIRST_HUMAN_LINE FIRST_REPLY SECOND_HUMAN_LINE SUMMARY_BODY; do
+  printf '%s' "$OUT" | grep -qF -- "$want" &&
+    pass "keeps conversation: $want" ||
+    fail "keeps conversation: $want" "missing from the window"
+done
+for gone in TOOLNOISE HIDDEN_THOUGHT SUBAGENT_CHATTER META_LINE SYSTEM_LINE; do
+  printf '%s' "$OUT" | grep -qF -- "$gone" &&
+    fail "filters out: $gone" "leaked into the window" ||
+    pass "filters out: $gone"
+done
+printf '%s' "$OUT" | grep -qF "no watermark yet" &&
+  pass "first run reads the whole conversation" ||
+  fail "first run reads the whole conversation" "$OUT"
+printf '%s' "$OUT" | grep -qF "crosses a context compaction" &&
+  pass "flags a compaction inside the window" ||
+  fail "flags a compaction inside the window" "$OUT"
+
+# The watermark: written by the script, never computed by the model.
+check "marks the watermark" 0 "watermark at 2026-07-27T01:02:00Z" $SCAN --mark
+if python3 - "$SCAN_PROJ/.qna/$SCAN_SID.meta" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if d.get("scan_uuid") == "u2" and d.get("scan_ts") else 1)
+PY
+then
+  pass "watermark lands in .meta"
+else
+  fail "watermark lands in .meta" "scan_uuid/scan_ts not stored"
+fi
+check "second run finds nothing new" 0 "nothing new since" $SCAN
+
+# Only the new turn comes back, and it resumed by uuid rather than by clock.
+printf '{"type":"user","uuid":"u3","timestamp":"2026-07-27T01:03:00Z","message":{"role":"user","content":[{"type":"text","text":"THIRD_HUMAN_LINE"}]}}\n' >>"$SCAN_T"
+OUT=$($SCAN 2>&1)
+printf '%s' "$OUT" | grep -qF "THIRD_HUMAN_LINE" &&
+  pass "window carries the new turn" ||
+  fail "window carries the new turn" "$OUT"
+printf '%s' "$OUT" | grep -qF "FIRST_HUMAN_LINE" &&
+  fail "window excludes already-scanned turns" "old turn came back" ||
+  pass "window excludes already-scanned turns"
+printf '%s' "$OUT" | grep -qF "resumed by uuid" &&
+  pass "resumes by uuid" ||
+  fail "resumes by uuid" "$OUT"
+
+# A uuid that no longer exists must not silently yield an empty window: fall
+# back to the clock, and if that fails too, re-read everything. Under-reading is
+# invisible; over-reading is merely slower.
+python3 - "$SCAN_PROJ/.qna/$SCAN_SID.meta" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["scan_uuid"] = "vanished-uuid"
+json.dump(d, open(p, "w"))
+PY
+check "falls back to the timestamp when the uuid is gone" 0 "resumed by timestamp" $SCAN
+python3 - "$SCAN_PROJ/.qna/$SCAN_SID.meta" <<'PY'
+import json, sys
+json.dump({"scan_uuid": "vanished-uuid", "scan_ts": "1999-01-01T00:00:00Z"}, open(sys.argv[1], "w"))
+PY
+check "re-reads everything when neither anchor resolves" 0 "FIRST_HUMAN_LINE" $SCAN
+
+# Unreadable transcript is not the same as an empty conversation: it has to say
+# so, because the fallback is for the model to scan its own context instead.
+check "reports an unreadable transcript" 2 "transcript unreadable" \
+  "$SCRIPTS/qna-scan" --session "$SCAN_SID" --project "$SCAN_PROJ" \
+  --transcript "$WORK/no-such-transcript.jsonl"
+
+# Reading is read-only: the watermark moves on --mark and nowhere else.
+check "plain scan leaves the watermark alone" 0 "" $SCAN
+if python3 - "$SCAN_PROJ/.qna/$SCAN_SID.meta" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if d.get("scan_uuid") == "vanished-uuid" else 1)
+PY
+then
+  pass "plain scan wrote nothing"
+else
+  fail "plain scan wrote nothing" "meta changed without --mark"
+fi
+
+# A cap that stays quiet reads as "you have seen everything".
+BIG_T="$WORK/big.jsonl"
+python3 - "$BIG_T" <<'PY'
+import json
+with open(__import__("sys").argv[1], "w") as f:
+    for i in range(60):
+        f.write(json.dumps({
+            "type": "user", "uuid": f"b{i}",
+            "timestamp": "2026-07-27T02:%02d:00Z" % i,
+            "message": {"role": "user", "content": [{"type": "text", "text": "X" * 5000}]},
+        }) + "\n")
+PY
+check "reports turns dropped to the size cap" 0 "were NOT scanned" \
+  "$SCRIPTS/qna-scan" --session "cap-session" --project "$SCAN_PROJ" --transcript "$BIG_T"
+
+# Same lazy-directory rule as everything else: reading must not conjure state.
+VIRGIN="$WORK/virgin"
+mkdir -p "$VIRGIN"
+check "reading creates no .qna/ in a fresh project" 0 "" \
+  "$SCRIPTS/qna-scan" --session "fresh-scan" --project "$VIRGIN" --transcript "$SCAN_T"
+if [ -e "$VIRGIN/.qna" ]; then
+  fail "reading creates no .qna/ in a fresh project" "$(ls -a "$VIRGIN/.qna")"
+else
+  pass "reading creates no .qna/ in a fresh project"
+fi
 
 # ---------------------------------------------------------------------- summary
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

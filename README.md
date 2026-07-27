@@ -125,8 +125,8 @@ bash reinstall.sh --local      # force working tree
                         |              |
                     read file <--------+
                         |
-        scan conversation
-                        |
+                    qna-scan  <-- transcript, minus 97% tool traffic
+                        |           starting after the last scan
                         v
                     reconcile --> settled / moot --> shown, not asked
                         |
@@ -145,7 +145,10 @@ bash reinstall.sh --local      # force working tree
                         v
                   decision list --> stop
                         |
-              qna-mark --off               validator stood down
+                        +-> still-open scan finds --> qna-add
+                        |
+              qna-scan --mark                next scan starts here
+              qna-mark --off                 validator stood down
 
   ============  at the end of a turn  ============
        Stop hook --> count changed?  ->  "qna: 3 parked"
@@ -166,6 +169,7 @@ of instruction a model drifts away from, so neither is left as an instruction.
 | Three to four options per question | |
 | Every single-select option has a preview | |
 | Where files land — every path is injected, never worked out by the model | |
+| Which stretch of conversation is unscanned — the watermark is read and written by `qna-scan`, never reasoned about | |
 
 A refusal is phrased to name the thinking gap, not the missing field:
 
@@ -191,8 +195,29 @@ moves — and a marker written to the wrong place is indistinguishable from no
 marker at all, which reads as "not inside `/qna:ask`" and lets every question
 through unchecked.
 
-`tests/smoke.sh` asserts all of it: 51 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 77 cases, no dependencies, temp directory,
 quiet unless something fails.
+
+### Reading the conversation without reading the transcript
+
+A working session's transcript is enormous and almost none of it is
+conversation. Measured on the session that built this feature: **2916.7 KB
+total, of which 97% is tool calls, tool results, thinking and metadata.** The
+actual back-and-forth was 97 KB.
+
+So `qna-scan` does two things, both in code rather than judgement:
+
+- **Filters** to user messages and Claude's own prose. That alone is the
+  difference between a file too large to open and one that fits in a scan.
+- **Windows** from where the last `/qna:ask` stopped, resuming by entry uuid with
+  the timestamp as fallback. A second run in a long session reads only what is
+  new; if neither anchor resolves it re-reads everything rather than guessing a
+  boundary, because over-reading is merely slower and under-reading is silent.
+
+The watermark advances as the last action of `/qna:ask`, not the first. An
+interrupted run therefore re-reads that stretch instead of skipping it. And when
+the window crosses a context compaction, the scan says so — detail from before
+that point survives only as a summary.
 
 ## Deliberately not doing
 
@@ -207,14 +232,16 @@ quiet unless something fails.
   so it never reaches version control and your project's `.gitignore` is left
   alone.
 - **Not an archive.** Settled items are deleted; the decisions live in the
-  conversation.
+  conversation. The file is the memory for what is *still open* — which is why
+  anything the scan finds and leaves open gets written into it before the
+  watermark moves past that turn.
 
 ## Storage
 
 ```
 <project>/.qna/.gitignore      a single "*" — the directory hides itself
 <project>/.qna/<session>.md    parked decisions
-<project>/.qna/<session>.meta  transcript path, plus the last count reported
+<project>/.qna/<session>.meta  transcript path, last count reported, scan watermark
 <project>/.qna/<session>.active  qna-mark's marker, live only while /qna:ask runs
 ```
 

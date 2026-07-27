@@ -50,11 +50,29 @@ they are simply unenforced this run.
 
 ## 1. Scan
 
-Two sources, merged and de-duplicated. The file is a supplement, not a
+Three sources, merged and de-duplicated. The file is a supplement, not a
 replacement: nothing forces a model to notice it is making a decision, so
 recorded coverage is partial by nature.
 
-**The conversation**, looking for five kinds of thing:
+**The conversation on disk** — run `QNA_SCAN` (the whole line, no flags) and
+read what it prints. It filters the transcript down to user messages and your
+own prose, and starts from where the last `/qna:ask` stopped, so a second run in
+a long session is cheap. Two things it tells you that your context cannot:
+
+- **Turns that are no longer in your context.** If it reports crossing a context
+  compaction, everything before that point reaches you only as a condensed
+  summary — treat detail from there as approximate and say so in the overview.
+- **What was already scanned.** Turns before the watermark are absent by design.
+  Anything still open from back there is in the pending file, because the file is
+  the memory; settled and dismissed items are deliberately not kept.
+
+If it reports the transcript is unreadable, or names turns it dropped to stay
+under its size cap, scan your own context for that stretch instead. Never
+reconstruct the boundary yourself and never pass it a timestamp — it holds the
+watermark, you do not.
+
+**Your own context**, for the turn in flight and anything the script's window
+missed, looking for five kinds of thing:
 
 1. Questions you asked that the user never actually answered
 2. Anything either of you called "later" or "for now"
@@ -71,7 +89,8 @@ things to note.
 
 **The pending file** — `Read` the absolute path SessionStart injected as
 `QNA_FILE`. If it does not exist yet, nothing has been parked; the conversation
-is your only source.
+is your only source. This is where anything still open from before the watermark
+lives, so read it even when the window comes back empty.
 
 ## 2. Filter
 
@@ -285,4 +304,15 @@ Then clean up the file:
 - Skipped because of the scope gate: **keep** — the user never ruled on them
 - Left deliberately open (the user chose Other and said "let me think"): keep
 
-Finally, switch the validator off — the same `QNA_MARK` line, with `--off`.
+**Anything still open that you found by scanning goes into the file via
+`QNA_ADD`** — one call each, before you touch anything else here. Those items
+were never recorded: the recording scripts capture decisions you made, not
+questions you raised. The file is the only memory that survives, and the next
+run's window starts after this turn, so an open item left out of it is gone.
+
+Finally, two commands, in this order:
+
+1. `QNA_SCAN` with `--mark` appended — records this scan's endpoint so the next
+   run starts here. Last, because an interrupted run must re-read this stretch
+   rather than skip it.
+2. `QNA_MARK` with `--off` appended — stands the validator down.

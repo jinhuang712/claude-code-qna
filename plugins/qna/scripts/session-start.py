@@ -3,9 +3,9 @@
 
 Two jobs beyond the injection itself:
 
-  * stash transcript_path in .qna/<session>.meta, because qna-transcript has no
-    other reliable way to find it (the path under ~/.claude/projects/ is an
-    internal convention and cwd can move mid-session)
+  * stash transcript_path in .qna/<session>.meta, because qna-transcript and
+    qna-scan have no other reliable way to find it (the path under
+    ~/.claude/projects/ is an internal convention and cwd can move mid-session)
   * sweep orphaned files older than 30 days
 
 Runs again after auto-compaction (matcher includes "compact"), which is what
@@ -33,9 +33,10 @@ call time may not be the one the hooks read.
   QNA_ADD     = {add}
   QNA_RESOLVE = {resolve}
   QNA_MARK    = {mark}
+  QNA_SCAN    = {scan}
   QNA_FILE    = {pending}
 
-**Those four names are labels in this text, not shell variables.** Nothing
+**Those five names are labels in this text, not shell variables.** Nothing
 exports them: a hook cannot set the environment of the shell you run commands
 in, and that shell keeps no state between calls. `$QNA_ADD --title x` therefore
 expands to `--title x` and fails with "command not found" — which is not a
@@ -43,8 +44,9 @@ refusal and must not be worked around. Paste the full line instead. Every
 example below already has it filled in.
 
 QNA_ADD and QNA_RESOLVE are the two you use while working. QNA_MARK takes --on
-or --off appended, and QNA_FILE is a path to Read; both belong to /qna:ask
-alone — ignore them otherwise.
+or --off appended, QNA_SCAN prints the conversation not yet scanned, and
+QNA_FILE is a path to Read; those three belong to /qna:ask alone — ignore them
+otherwise.
 
 ### 1. You decided something the user has not signed off on
 
@@ -156,6 +158,7 @@ def main():
         # No "--on|--off" suffix here: an unquoted pipe in an injected command
         # line is a shell pipe, not documentation.
         mark=cmd("qna-mark"),
+        scan=cmd("qna-scan", transcript_too=True),
         pending=qna_lib.pending_path(session, project, create=False),
     )
 
