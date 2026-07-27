@@ -2,9 +2,10 @@
 # Smoke test for the qna scripts and hooks.
 #
 # Everything this plugin claims to enforce in code is asserted here: the
-# refusals, the exit codes, the validator's three rules, and the marker's
-# scope. The prompt-side rules (R3, R5, R6, R7, scan recall) cannot be tested
-# this way — they need a real session.
+# refusals, the exit codes, the validator's three rules (which now apply to every
+# session, not just /qna:ask), the scan window and watermark, the unrecorded-work
+# nudge, and the orphan sweep. The prompt-side rules (R3, R5, R6, R7, scan
+# recall) cannot be tested this way — they need a real session.
 #
 #     tests/smoke.sh          quiet unless something fails
 #     tests/smoke.sh -v       show every case
@@ -159,7 +160,6 @@ for want in \
   '"hookEventName": "SessionStart"' \
   "qna-add --session $SID --project $PROJ" \
   "qna-resolve --session $SID --project $PROJ" \
-  "qna-mark --session $SID --project $PROJ" \
   "qna-scan --session $SID --project $PROJ --transcript $TRANSCRIPT" \
   "$PROJ/.qna/$SID.md"; do
   if printf '%s' "$INJECTED" | grep -qF -- "$want"; then
@@ -254,22 +254,8 @@ grep -qF -- "- [x] #1 " "$PROJ/.qna/$SID.md" &&
 grep -qF "  - Result: SQLite it is" "$PROJ/.qna/$SID.md" &&
   pass "appends Result" || fail "appends Result" "absent"
 
-# --------------------------------------------------------------------- qna-mark
-printf '=== qna-mark\n'
-MARK="$SCRIPTS/qna-mark --session $SID --project $PROJ"
-check "--off is idempotent when absent" 0 "Validator off." $MARK --off
-check "--status reports off" 0 "Validator off." $MARK --status
-check "--on" 0 "Validator on" $MARK --on
-check "--status reports on" 0 "Validator on." $MARK --status
-# The bare-touch bug: a project with no .qna/ yet must not fail.
-check "--on creates .qna/ in a fresh project" 0 "Validator on" \
-  "$SCRIPTS/qna-mark" --session other-session --project "$FRESH" --on
-[ -f "$FRESH/.qna/other-session.active" ] &&
-  pass "fresh project marker exists" || fail "fresh project marker exists" "absent"
-check "rejects two modes at once" 2 "" $MARK --on --off
-
 # ---------------------------------------------------------------- PreToolUse
-printf '=== PreToolUse validator (marker live)\n'
+printf '=== PreToolUse validator (every session, no marker)\n'
 hook "denies two options" "yes/no question in disguise" pre-tool-use.py "$(ask_payload "$PROJ" "$q_two")"
 hook "denies five options" "exceeds the tool cap" pre-tool-use.py "$(ask_payload "$PROJ" "$q_five")"
 hook "denies missing preview" "have no preview: b, c" pre-tool-use.py "$(ask_payload "$PROJ" "$q_nopreview")"
@@ -297,14 +283,12 @@ hook "ignores other tools" "" pre-tool-use.py \
 hook "validates from a nested cwd" "yes/no question in disguise" pre-tool-use.py \
   "$(ask_payload "$PROJ/src/deep/nested" "$q_two")"
 
-printf '=== PreToolUse validator (marker off or stale)\n'
-$MARK --off >/dev/null
-hook "allows everything when marker absent" "" pre-tool-use.py "$(ask_payload "$PROJ" "$q_two")"
-$MARK --on >/dev/null
-touch -t 200001010000 "$PROJ/.qna/$SID.active"
-hook "allows everything when marker stale" "" pre-tool-use.py "$(ask_payload "$PROJ" "$q_two")"
-[ ! -f "$PROJ/.qna/$SID.active" ] &&
-  pass "stale marker is swept" || fail "stale marker is swept" "still there"
+# Scope is no longer conditional: the same payload that validates inside
+# /qna:ask must validate in a project that has never used the tool at all.
+hook "validates in a project with no .qna/" "yes/no question in disguise" pre-tool-use.py \
+  "$(ask_payload "$FRESH" "$q_two")"
+hook "validates with no session id at all" "yes/no question in disguise" pre-tool-use.py \
+  "$(printf '{"cwd":"%s","tool_name":"AskUserQuestion","tool_input":{"questions":[%s]}}' "$PROJ" "$q_two")"
 
 # ------------------------------------------------------------------- Stop hook
 printf '=== Stop hook\n'
@@ -370,7 +354,28 @@ with open(sys.argv[1], "a") as f:
         "type": "hook_additional_context",
         "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
 PY
-hook "does not nudge twice at the same milestone" "" stop-count.py "$NUDGE_PAYLOAD"
+hook "does not nudge twice for the same stride" "" stop-count.py "$NUDGE_PAYLOAD"
+
+# Fixed stride, not a thinning series: with one nudge sent, the next is due at 30
+# replies, not at some further-out milestone.
+mk_replies 29
+python3 - "$NUDGE_T" <<'PY2'
+import json, sys
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps({"type": "attachment", "attachment": {
+        "type": "hook_additional_context",
+        "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
+PY2
+hook "still quiet one reply short of the next stride" "" stop-count.py "$NUDGE_PAYLOAD"
+mk_replies 30
+python3 - "$NUDGE_T" <<'PY2'
+import json, sys
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps({"type": "attachment", "attachment": {
+        "type": "hook_additional_context",
+        "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
+PY2
+hook "nudges again at the second stride" "30 replies into this session" stop-count.py "$NUDGE_PAYLOAD"
 if [ -e "$NUDGE_PROJ/.qna" ]; then
   fail "nudging leaves no .qna/ behind" "$(ls -a "$NUDGE_PROJ/.qna" | tr '\n' ' ')"
 else

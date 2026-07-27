@@ -15,28 +15,23 @@ That is the whole job. Treat it as that request, not as a file-cleanup chore.
 If `$ARGUMENTS` is present, limit the scan to that topic, and say in the
 overview how many out-of-topic items you left untouched.
 
-## 0. Switch the validator on
+## 0. What you have to work with
 
-First action, before anything else. `QNA_MARK` is a full command line
-SessionStart injected into your context for this session — a **label in that
-text, not a shell variable**. Nothing exports it, so `$QNA_MARK` expands to
-nothing. Paste the whole line and append `--on`:
-
-```
-<the QNA_MARK line from the qna block> --on
-```
-
-That turns on the `PreToolUse` validator for the rest of this command, which is
-what makes R2 and R4 below real rather than advisory. **Switch it off as the
-last action, always** (same line, `--off`) — including when you stop early or
-the user interrupts. It self-expires after 30 minutes, but do not rely on that.
+`QNA_ADD`, `QNA_SCAN` and `QNA_FILE` are full command lines SessionStart
+injected into your context for this session — **labels in that text, not shell
+variables**. Nothing exports them, so `$QNA_SCAN` expands to nothing. Paste the
+whole line and append flags where a step says to.
 
 Never assemble these paths yourself. The shell has no `CLAUDE_PROJECT_DIR` and
 the working directory can move, so a hand-built path may not be the one the
-hooks read — and a marker written somewhere else is indistinguishable from no
-marker at all: every question would pass unchecked, silently.
+hooks read, and writing to the wrong place fails silently — which is worse than
+failing loudly.
 
-If `QNA_MARK` is not in your context, SessionStart did not run — the plugin
+R2 and R4 are enforced by a `PreToolUse` hook on every `AskUserQuestion` in
+every session, so they hold here whether or not the injection arrived. Nothing
+needs switching on.
+
+If those names are not in your context, SessionStart did not run — the plugin
 arrived mid-session. **Open with one flat line and go straight on:**
 
 ```
@@ -44,9 +39,9 @@ arrived mid-session. **Open with one flat line and go straight on:**
 ```
 
 That is the whole notice. No explanation of why, no advice about restarting, and
-no mention of hooks, markers, injection or validators — those are plumbing, and
-the person reading came here to be asked questions. The rules below still apply;
-they are simply unenforced this run.
+no mention of hooks, injection or transcripts — those are plumbing, and the
+person reading came here to be asked questions. Skip the steps that need those
+commands and scan your own context instead.
 
 ## 1. Scan
 
@@ -187,22 +182,17 @@ last few turns right now.
 
 ## 5. Overview
 
-A count, then **two tables** — what needs nothing from the user, and what does —
-then straight into the first question, no confirmation step. One combined table
-is what this replaces: with the queue mixed in, nothing tells the reader at a
-glance which rows are still waiting on them. Never a fenced block of aligned
-monospace text either: it reads as a ledger dump and it wraps badly.
+A count, then **two tables — the queue first** — then straight into the first
+question, no confirmation step. One combined table is what this replaces: with
+the queue mixed in, nothing tells the reader at a glance which rows are still
+waiting on them. Never a fenced block of aligned monospace text either: it reads
+as a ledger dump and it wraps badly.
+
+The queue leads because it is the only part that wants something from the person
+reading. Making them scroll past a reconciliation ledger to reach their own
+to-do list has the priority backwards.
 
 **Scanned 11 — 7 left to ask.**
-
-**Not asking · 4**
-
-| Item | Verdict | Evidence / why |
-|---|---|---|
-| Default TTL → `300`s | decided | "five minutes is fine" |
-| `--no-cache` shipped | decided | "add the flag" |
-| Cache filename format | moot | backend is SQLite now, there are no filenames |
-| Cache-hit logging → debug | by default | trivial, say so if you disagree |
 
 **Yours to settle · 7**
 
@@ -212,10 +202,31 @@ monospace text either: it reads as a ledger dump and it wraps badly.
 | 2 | heavy | Write failure: degrade silently or warn? |
 | 3 | light | When expiry cleanup runs |
 
-Close with one line inviting corrections. Every row of the first table carries
-its evidence — the user's own words for decided, the reason for moot, why it was
-too trivial to ask for a default. That column is the only way a wrong call gets
-caught, so it is never left blank.
+**Not asking · 4**
+
+| Item | Verdict | Evidence / why |
+|---|---|---|
+| Default TTL → `300`s | decided | "five minutes is fine" |
+| `--no-cache` shipped | decided | "add the flag" |
+| Cache filename format | moot | backend is SQLite now, there are no filenames |
+| 2 more handled by default | by default | cache-hit logging, temp-file naming — say so if you disagree |
+
+Close with one line inviting corrections.
+
+**The second table has to stay short, or it stops being read.** Two rules keep it
+bounded, and neither drops anything that matters:
+
+- **It carries only rows where a wrong call costs the user something** — settled
+  items, whose quote they may dispute, and moot ones, whose premise they may not
+  agree has gone. Those keep a row each with their evidence, always: that column
+  is the only way a wrong call gets caught. Items handled by default are trivial
+  by definition and are the rows that multiply, so more than two of them collapse
+  into one row with a count and the titles inline. The closing invitation to
+  object already covers them.
+- **Never re-list what an earlier run already reconciled.** Those are gone from
+  the file on purpose. This table is what changed since the last scan, not a
+  running total — a table that only ever grows is one nobody reads by the third
+  run.
 
 If the session has been compacted, say so above the tables.
 
@@ -352,12 +363,15 @@ Then clean up the file:
 - Skipped because of the scope gate: **keep** — the user never ruled on them
 - Left deliberately open (the user chose Other and said "let me think"): keep
 
-Scan finds are already in the file — step 2 put them there, which is also why
-nothing can be left behind when the window moves past this turn.
+Scan finds from step 2 are already in the file. **What is not yet in it is
+anything R6 turned up while you were asking** — an answer that opened a new
+question, a follow-on nobody has ruled on. Those arrived after step 2, so put
+each one still open through `QNA_ADD --found-by-scan` now.
 
-Finally, two commands, in this order:
+This is the last chance. The watermark moves next, and the turns you and the
+user just spent asking and answering fall behind it — an open item from those
+turns that is not in the file is not merely missed, it is unreachable.
 
-1. `QNA_SCAN` with `--mark` appended — records this scan's endpoint so the next
-   run starts here. Last, because an interrupted run must re-read this stretch
-   rather than skip it.
-2. `QNA_MARK` with `--off` appended — stands the validator down.
+Finally, `QNA_SCAN` with `--mark` appended: it records this scan's endpoint so
+the next run starts here. Last of everything, because an interrupted run must
+re-read this stretch rather than skip it.

@@ -44,15 +44,6 @@ leads.
 
 **Scanned 11 — 7 left to ask.**
 
-**Not asking · 4**
-
-| Item | Verdict | Evidence / why |
-|---|---|---|
-| Default TTL → `300`s | decided | "five minutes is fine" |
-| `--no-cache` shipped | decided | "add the flag" |
-| Cache filename format | moot | backend is SQLite now, there are no filenames |
-| Cache-hit logging → debug | by default | trivial, say so if you disagree |
-
 **Yours to settle · 7**
 
 | # | Weight | Question |
@@ -61,9 +52,21 @@ leads.
 | 2 | heavy | Write failure: degrade silently or warn? |
 | 3 | light | When expiry cleanup runs |
 
+**Not asking · 4**
+
+| Item | Verdict | Evidence / why |
+|---|---|---|
+| Default TTL → `300`s | decided | "five minutes is fine" |
+| `--no-cache` shipped | decided | "add the flag" |
+| Cache filename format | moot | backend is SQLite now, there are no filenames |
+| 2 more handled by default | by default | cache-hit logging, temp-file naming |
+
 Two tables, split on the only line that matters while reading: does this row want
-something from you. Every row of the first carries its evidence, because that
-column is the only way a wrong "already decided" gets caught.
+something from you — and the queue leads, because making you scroll past a
+reconciliation ledger to reach your own to-do list has it backwards. Settled and
+moot rows always carry their evidence, because that column is the only way a
+wrong "already decided" gets caught; by-default rows collapse into a count, since
+they are the ones that multiply.
 
 Meanwhile, as Claude works, choices it makes on your behalf get parked in
 `.qna/<session>.md` so they are still there after a context compaction — and so
@@ -121,8 +124,6 @@ bash reinstall.sh --local      # force working tree
                                        |
   ==========  you run /qna:ask  ========|=================
                                        |
-              qna-mark --on            |   validator armed, 30 min
-                        |              |
                     read file <--------+
                         |
                     qna-scan  <-- transcript, minus 97% tool traffic
@@ -152,8 +153,9 @@ bash reinstall.sh --local      # force working tree
                         v
                   decision list --> stop
                         |
+                        +-> new opens from R6 --> qna-add
+                        |
               qna-scan --mark                next scan starts here
-              qna-mark --off                 validator stood down
 
   ============  at the end of a turn  ============
        Stop hook --> count changed?  ->  "qna: 3 parked"
@@ -194,8 +196,16 @@ happens if it is chosen. If you cannot think of what to show, you have not
 worked out where that option leads.
 ```
 
-The question validator is scoped to `/qna:ask` by a self-expiring marker file,
-so ordinary questions elsewhere in your session are untouched.
+**The validator runs on every question, in every session** — not just inside
+`/qna:ask`. It used to be scoped to the command by a marker file, on the
+reasoning that these rules suit settling a backlog and are needlessly rigid for
+ordinary conversation. Then a real session supplied the comparison: 49 questions
+asked outside the command, and the 3 single-selects among them had no preview
+between them. `/qna:ask` runs a few times a day; ordinary questions run dozens
+of times. Enforcing only in the rarest place had it backwards.
+
+The cost is real: a question that genuinely has two courses of action and no
+third now has to find one.
 
 ### When the question is the problem
 
@@ -212,11 +222,10 @@ follow a question should not have to write an essay saying so.
 Nothing works out a path for itself. Every command is injected at session start
 carrying this session's id and this project's absolute path, because the shell
 Claude runs commands in has no `CLAUDE_PROJECT_DIR` and the working directory
-moves — and a marker written to the wrong place is indistinguishable from no
-marker at all, which reads as "not inside `/qna:ask`" and lets every question
-through unchecked.
+moves — and a file written to the wrong place fails without failing: the pending
+list silently reads as empty, and the scan silently re-reads the whole session.
 
-`tests/smoke.sh` asserts all of it: 91 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 84 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ### Reading the conversation without reading the transcript
@@ -263,7 +272,6 @@ that point survives only as a summary.
 <project>/.qna/.gitignore      a single "*" — the directory hides itself
 <project>/.qna/<session>.md    parked decisions
 <project>/.qna/<session>.meta  transcript path, last count reported, scan watermark
-<project>/.qna/<session>.active  qna-mark's marker, live only while /qna:ask runs
 ```
 
 The directory appears only when something is actually recorded. The hooks run in

@@ -32,21 +32,19 @@ call time may not be the one the hooks read.
 
   QNA_ADD     = {add}
   QNA_RESOLVE = {resolve}
-  QNA_MARK    = {mark}
   QNA_SCAN    = {scan}
   QNA_FILE    = {pending}
 
-**Those five names are labels in this text, not shell variables.** Nothing
+**Those four names are labels in this text, not shell variables.** Nothing
 exports them: a hook cannot set the environment of the shell you run commands
 in, and that shell keeps no state between calls. `$QNA_ADD --title x` therefore
 expands to `--title x` and fails with "command not found" — which is not a
 refusal and must not be worked around. Paste the full line instead. Every
 example below already has it filled in.
 
-QNA_ADD and QNA_RESOLVE are the two you use while working. QNA_MARK takes --on
-or --off appended, QNA_SCAN prints the conversation not yet scanned, and
-QNA_FILE is a path to Read; those three belong to /qna:ask alone — ignore them
-otherwise.
+QNA_ADD and QNA_RESOLVE are the two you use while working. QNA_SCAN prints the
+conversation not yet scanned and QNA_FILE is a path to Read; both belong to
+/qna:ask alone — ignore them otherwise.
 
 ### 1. You decided something the user has not signed off on
 
@@ -125,20 +123,20 @@ def main():
     project = qna_lib.find_session_dir(data.get("cwd"), session)
     transcript = data.get("transcript_path")
 
-    # Only projects that have actually recorded something get a .qna/. This hook
-    # runs everywhere, and creating the directory here littered one into every
-    # project a session was ever opened in. The transcript path reaches qna-add
-    # through the injected command line instead, so nothing needs to be on disk
-    # before the first entry.
-    # Sweep first. Writing bookkeeping and then sweeping means the file just
-    # written is always fresh, so a directory whose every entry has expired
-    # never reaches the empty state that lets it be removed — it would be
-    # refilled a moment before being inspected, every single session.
+    # Sweep before writing anything. The other order means the file just written
+    # is always fresh, so a directory whose every entry has expired never reaches
+    # the empty state that lets it be removed — refilled a moment before being
+    # inspected, every single session.
     try:
         qna_lib.sweep_orphans(project)
     except Exception:
         pass
 
+    # Only projects that have actually recorded something get a .qna/. This hook
+    # runs everywhere, and creating the directory here littered one into every
+    # project a session was ever opened in. The transcript path reaches qna-add
+    # through the injected command line instead, so nothing needs to be on disk
+    # before the first entry.
     if transcript and qna_lib.qna_dir_exists(project):
         meta = qna_lib.load_meta(session, project)
         meta["transcript_path"] = transcript
@@ -159,9 +157,6 @@ def main():
     text = PROTOCOL.format(
         add=cmd("qna-add", transcript_too=True),
         resolve=cmd("qna-resolve"),
-        # No "--on|--off" suffix here: an unquoted pipe in an injected command
-        # line is a shell pipe, not documentation.
-        mark=cmd("qna-mark"),
         scan=cmd("qna-scan", transcript_too=True),
         pending=qna_lib.pending_path(session, project, create=False),
     )

@@ -8,9 +8,12 @@ Repeating "2 parked" at the end of every reply for as long as the backlog sits
 there is noise, and noise is what makes a reminder stop registering. A change
 means something actually happened: one was parked, or one was settled.
 
-**Nothing has been recorded** — re-surface the protocol, three times in a
-session, at 15 / 45 / 90 replies. The earlier design nudged every turn and it
-was cut for costing a per-turn reminder to buy very little. What that traded
+**Nothing has been recorded** — re-surface the protocol every 15 replies, at a
+fixed cadence for as long as the session runs. Milestones that thin out (15,
+then 45, then 90) were rejected: a decision made at reply 200 is no less worth
+recording than one made at reply 15, and a reminder that fades leaves the long
+tail of a long session uncovered. The earlier design nudged every single turn
+and was cut for costing a per-turn reminder to buy very little. What that traded
 away is now measured: a real 54-minute session with 84 conversation turns and 49
 questions asked recorded zero entries, and this hook never said a word, because
 the count never changed from zero. The protocol was injected at turn zero and
@@ -34,14 +37,10 @@ import qna_lib  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Where to re-surface the recording protocol in a session that has recorded
-# nothing. The protocol is injected once, at turn zero, and then never mentioned
-# again: measured on a real 54-minute session with 84 conversation turns and 49
-# questions asked, qna-add ran zero times, and this hook stayed silent the whole
-# way because silence is what it does at a count of zero. The reminder existed
-# only for sessions already using the tool, which are the ones that need it
-# least.
-NUDGE_AT = (15, 45, 90)
+# How often to re-surface the recording protocol in a session that has recorded
+# nothing. A fixed stride, not a series that thins out: a choice made at reply
+# 200 is no less worth recording than one made at reply 15.
+NUDGE_EVERY = 15
 
 # Nudges are counted out of the transcript rather than a state file. A Stop hook
 # has nowhere to write that would not put a .qna/ into every project a session
@@ -70,7 +69,7 @@ def turns_and_nudges(path):
     because the tag is our own literal, not a field name.
     """
     if os.path.getsize(path) > MAX_TRANSCRIPT_BYTES:
-        return 0, len(NUDGE_AT)  # too big to read: behave as though done
+        return 0, 0  # too big to read: turns stay 0, so nothing fires
 
     nudges = 0
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -83,14 +82,14 @@ def turns_and_nudges(path):
 
 
 def nudge(session, project, transcript):
-    """Re-surface the protocol once at each milestone, then stop."""
+    """Re-surface the protocol every NUDGE_EVERY replies, silently."""
     if not transcript or not os.path.exists(transcript):
         return 0
     try:
         turns, sent = turns_and_nudges(transcript)
     except OSError:
         return 0
-    if sent >= len(NUDGE_AT) or turns < NUDGE_AT[sent]:
+    if turns < (sent + 1) * NUDGE_EVERY:
         return 0
 
     add = "{} --session {} --project {}".format(

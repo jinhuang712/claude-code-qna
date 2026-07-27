@@ -1,8 +1,8 @@
 # /qna · v1 定稿
 
-状态：v1 已定稿并实装，无待审项。最后一次与实装对账 2026-07-27 15:20:11（北京时间，下同）。
+状态：v1 已定稿并实装，无待审项。最后一次与实装对账 2026-07-27 16:42:05（北京时间，下同）。
 
-代码侧的机械保证由 `tests/smoke.sh` 逐条断言（91 条）：选项下限与上限、preview 必填、`--where` 必须落到真实 file:line 或原话、归档必须带原话、四条命令的路径全注入、marker 的生效范围与自然过期、目录懒建。prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
+代码侧的机械保证由 `tests/smoke.sh` 逐条断言（84 条）：选项下限与上限、preview 必填、`--where` 必须落到真实 file:line 或原话、归档必须带原话、四条命令的路径全注入、marker 的生效范围与自然过期、目录懒建。prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
 
 **两条召回路径，同一个硬闸。** 记录侧在决策发生的当下经 `qna-add` 落盘；扫描侧在 `/qna:ask` 时把过滤后的存活项**同样经 `qna-add` 落盘**（带 `--found-by-scan`）。于是「备选 / 代价 / 意外」这三道过滤在两侧都由脚本兜底，拒绝即答案。两侧唯一的差别写在 `Source` 字段里：`agent` 的备选是当时真比较过的，`scan` 的是事后补的——同一条门槛，不同的成色，文件里分得清。
 
@@ -144,7 +144,7 @@ G6.3 原文是"输出永不自称完整，措辞只能是'扫到的'"——不�
 
 **多选的选项下限是 2，不是 3。** R2 的下限 3 是为了拦是非题伪装，而两个复选框不是是非题——它有四种答案：都不要 / 只要 A / 只要 B / 都要。把多选也按 3 卡，直接把 G2.6 顶死：「要加哪些字段」这类题经常正好只有两个候选，拒了它就等于逼着退回成一串「要不要 A」「要不要 B」——正是多选存在的理由。
 
-**实测踩到过**：某会话里「两个契约新增字段要哪些？」带 `tag_ids` / `reviews[].language` 两个候选，是一道完全正当的多选题。当时校验器没开（中途装插件，无注入），所以放行了；开着的话会被拒，而且给出的理由是「2 options is a yes/no question in disguise」——对一道多选题来说这个诊断是错的。
+**实测踩到过**：某会话里「两个契约新增字段要哪些？」带 `tag_ids` / `reviews[].language` 两个候选，是一道完全正当的多选题。当时它被放行了，因为校验器还只在 `/qna:ask` 内生效而那个会话没跑过命令；按当时的规则它本该被拒，理由还会是「2 options is a yes/no question in disguise」——对一道多选题来说这个诊断是错的。
 
 实践中这两个需求很少落在同一道题上：需要 preview 的是方案对比题，而方案对比题天然单选；天然多选的题选项一行一个，本就不需要并排展示实物。
 
@@ -190,7 +190,7 @@ argument-hint: [可选：只清理某个话题，如「架构」]
 
 ### 我们提供的脚本
 
-五个脚本，**都不许模型自己拼路径**——`--session`、`--project`、`--transcript` 全由 `SessionStart` 注入在命令行里（理由见第九节「一切走脚本」）。
+四个脚本，**都不许模型自己拼路径**——`--session`、`--project`、`--transcript` 全由 `SessionStart` 注入在命令行里（理由见第九节「一切走脚本」）。
 
 ```
 qna-add   --session <id> --project <abs> --transcript <abs>   ← 注入，模型照抄
@@ -224,12 +224,6 @@ qna-resolve <id>  --session <id> --project <abs>
     已归档过             拒绝
     通过                 标 [x] 并追加 Result / Quote 行，回 "Resolved #4."
 
-
-qna-mark    --session <id> --project <abs>  --on | --off | --status
-
-    --on      建 .qna/<sid>.active（顺带 mkdir -p），开启 PreToolUse 校验器
-    --off     删标记，幂等（异常中断后再调不报错）
-    --status  报当前开关状态
 
 
 qna-scan    --session <id> --project <abs> --transcript <abs>  [--mark]
@@ -313,13 +307,16 @@ qna-transcript --grep "<原话>"
 记录侧有 `qna-add` 把关，提问侧原本只有 R1–R7 七条 prompt 规则——**编不出 `--alt` 就真的过不去，给两个选项却没人拦**。这个落差用 `PreToolUse` hook 抹平。
 
 ```
-PreToolUse   matcher: AskUserQuestion
-─────────────────────────────────────
-标记不存在或已过期  →  直接放行
-标记有效            →  逐题校验：
+PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
 
-    options < 3          → deny  "Refused: 2 options is a yes/no
+    入参解析失败         → deny  "Refused: the question payload did not
+    (__unparsedToolInput)         parse, so none of the asking rules
+                                  could be checked. Almost always size
+                                  — the previews are the usual culprit."
+    单选 options < 3     → deny  "Refused: 2 options is a yes/no
                                   question. R2 requires >= 3."
+    多选 options < 2     → deny  "Refused: 1 option is not something to
+                                  choose between."
     options > 4          → deny  "Refused: tool caps options at 4."
     单选且无 preview     → deny  "Refused: every single-select question
                                   needs a preview. If you cannot think of
@@ -329,20 +326,24 @@ PreToolUse   matcher: AskUserQuestion
 
 `deny` 的 `permissionDecisionReason` 直接回给模型，和 `qna-add` 的拒绝文案同一套路数：**拒绝本身就是答案**。
 
-**作用域靠标记文件**：`/qna:ask` 开头跑 `$QNA_MARK --on`，收尾跑 `--off`。hook 只在标记有效时校验，其余场合一律放行——qna 的规矩不外溢到日常对话。
+#### 作用域：全会话，不分场合
 
-**标记的位置必须由脚本算，不能由模型拼。** 让模型拼会开出一个静默失效的口子：写标记的是模型跑的 shell（那里**没有** `CLAUDE_PROJECT_DIR`，路径必然回落到当次工作目录），读标记的是 hook（用自己 payload 里的 `cwd`）。两边各自理解「当前目录」，会话起在子目录或中途 `cd` 就错位——而**找不到标记 = 判定 `/qna:ask` 没在跑 = 全部放行**，R2/R4 那道硬闸整程失效且毫无提示。故：写侧路径由 `SessionStart` 注入进 `$QNA_MARK`，读侧 hook 用 `find_session_dir` 按 session id 逐级向上定位（文件名带 session id，命中即证明是对的目录，撞不到别人的 `.qna/`）。
+**原设计限定在 `/qna:ask` 内**，靠一个 `.qna/<sid>.active` 标记文件开关，理由是「这些规则适合清理积压，对日常对话过于死板」。
 
-另一半同源：`touch` 不建父目录，`.qna/` 尚不存在时直接失败。`qna-mark --on` 走 `qna_dir(create=True)`，顺带建目录。
+**实测推翻了它。** 某会话 49 次提问、`/qna:ask` 从未调用，其中 3 道单选题**全部没有 preview**——R4 在命令之外的合规率是 0%。而比例是反的：`/qna:ask` 一天跑几次，普通提问一天几十次。**把最严的规则只用在最少的场合，等于没有规则。**
 
-**标记自过期**：文件内含时间戳，hook 见到超过 30 分钟的直接当作不存在并顺手删除。`/qna:ask` 异常中断留下的残标记会自愈，不需要别处做清理。
+于是校验器改为无条件生效，`qna-mark` 脚本、`.active` 标记、`/qna:ask` 的开关两步一并删除——标记的唯一职责就是划这个作用域，作用域没了它就是死代码。
+
+**接受的代价**：真的只有两条路的题（「要 A 还是要 B」）现在也得凑出第三个选项。这是明知代价后选的。
+
+**顺带消掉一条静默失效路径。** 标记时代最贵的失败模式是：写标记的是模型跑的 shell（那里**没有** `CLAUDE_PROJECT_DIR`，路径必然回落到当次工作目录），读标记的是 hook（用自己 payload 里的 `cwd`）。两边各自理解「当前目录」，会话起在子目录或中途 `cd` 就错位——而**找不到标记 = 判定 `/qna:ask` 没在跑 = 全部放行**，硬闸整程失效且毫无提示。校验器不再依赖任何磁盘状态，这个口子从根上不存在了。
 
 ### 依赖的内置工具
 
 | 工具 | 用在哪 |
 |---|---|
 | `AskUserQuestion` | 全部提问。`preview` 用于格式/结构类选项 |
-| `Bash` | 调 `qna-add` / `qna-resolve` / `qna-mark` / `qna-scan` |
+| `Bash` | 调 `qna-add` / `qna-resolve` / `qna-scan` |
 | `Read` | `/qna:ask` 读 pending 文件 |
 
 扫描侧不用 `Read` 读 transcript：3 MB 的文件读不进来，`qna-scan` 过滤加开窗之后才是可读的量。
@@ -351,7 +352,7 @@ PreToolUse   matcher: AskUserQuestion
 
 `<项目>/.qna/<session_id>.md`，append-only，按项目 + session 双重隔离。
 
-**目录懒建**：只有 `qna-add` 记进第一条、或 `qna-mark --on` 开校验器时才建 `.qna/`。三个 hook 一律先看目录在不在，不在就不碰磁盘——它们在每个项目都跑，没这条纪律就会把空目录撒得到处都是。
+**目录懒建**：只有 `qna-add` 记进第一条、或 `qna-scan --mark` 推水位线时才建 `.qna/`。三个 hook 一律先看目录在不在，不在就不碰磁盘——它们在每个项目都跑，没这条纪律就会把空目录撒得到处都是。
 
 ```markdown
 <!-- qna-pending · written by qna-add / qna-resolve · cleared by /qna:ask -->
@@ -390,7 +391,7 @@ PreToolUse   matcher: AskUserQuestion
        +--> 写 .qna/<session_id>.meta   存 transcript_path
        +--> 注入 三条记录协议 + 当前悬置清单(带 id)
        +--> 注入 四条命令，每条都带绝对 --project
-            QNA_ADD / QNA_RESOLVE / QNA_MARK / QNA_FILE
+            QNA_ADD / QNA_RESOLVE / QNA_SCAN / QNA_FILE
        |
        v
   ==================  主会话干活中  ==================
@@ -416,7 +417,6 @@ PreToolUse   matcher: AskUserQuestion
                                           |
   ==============  你敲 /qna:ask  ==========|=====================
                                           |
-       $QNA_MARK --on                     |     标记有效期 30 分钟
               |                           |
               |        读文件 <-----------+
               |           |
@@ -443,14 +443,16 @@ PreToolUse   matcher: AskUserQuestion
               |           v
               |    逐题问 --------> AskUserQuestion
               |           |              ^
-              |           |              |  PreToolUse 校验（仅标记有效时）
+              |           |              |  PreToolUse 校验（全会话恒生效）
               |           |              +--- options < 3      -> deny
               |           |              +--- options > 4      -> deny
               |           |              +--- 单选无 preview   -> deny
               |           v
               |      决策清单 --> 停
+              |           |
+              |           +--> R6 新冒出的仍未定项 --> qna-add
               v
-       $QNA_MARK --off
+       $QNA_SCAN --mark                   推进水位线，最后一步
 
   ══════════  每轮 turn 结束  ══════════
        Stop hook --> 数未勾选条目，与 .meta 里 reported_count 比
@@ -462,7 +464,7 @@ PreToolUse   matcher: AskUserQuestion
 图上两处容易看漏：
 
 - **`qna-add` 只有一个**。协议 1 和协议 2 走同一个脚本，区别只是后者带 `--deferred-by-user`。
-- **`PreToolUse` 卡在 `AskUserQuestion` 的入口**，不是流程里的一步。它由 `.active` 标记决定是否生效——`/qna:ask` 之外的任何提问都不受影响。
+- **`PreToolUse` 卡在 `AskUserQuestion` 的入口**，不是流程里的一步，也不分场合——每个会话的每一次提问都过它。
 
 ### 分层：能用代码保证的绝不用 prompt 保证
 
@@ -472,7 +474,7 @@ PreToolUse   matcher: AskUserQuestion
    + hook) |          alt 数量下限 · 归档必须带 quote
            |  提问侧  单选 3~4 个 · 多选 >= 2 个 · preview 必须存在
            |          入参解析失败（__unparsedToolInput）直接拒
-           |          （PreToolUse 校验器，作用域限于 qna 流程内）
+           |          （PreToolUse 校验器，全会话恒生效）
            |  落盘位置  锚点由 SessionStart 定、注入进每条命令
            |            读侧 hook 按 session id 向上定位
            |            （模型不参与任何路径计算）
@@ -487,11 +489,11 @@ PreToolUse   matcher: AskUserQuestion
 
 两侧保证强度现在对等：记录侧编不出 `--alt` 过不去，提问侧给两个选项也过不去。
 
-**「落盘位置」这一行的门槛与前两行不同：前两行拦的是错的内容，它拦的是错的地点。** 字段与数量算错会当场被拒；文件落错地方不报错——标记落到别处，校验器就判定 `/qna:ask` 没在跑，整程放行。**一条静默失效的路径，比十条会报错的更贵。** 所以凡是模型要算的东西，都先问一句：算错了会不会有人喊。没人喊的，交给脚本。
+**「落盘位置」这一行的门槛与前两行不同：前两行拦的是错的内容，它拦的是错的地点。** 字段与数量算错会当场被拒；文件落错地方不报错——pending 文件落到别处，`SessionStart` 就读不到既有条目，悬置清单凭空消失，而且没有任何提示。**一条静默失效的路径，比十条会报错的更贵。** 所以凡是模型要算的东西，都先问一句：算错了会不会有人喊。没人喊的，交给脚本。
 
 ### v1 范围
 
-装：`/qna:ask` · `qna-add` · `qna-resolve` · `qna-transcript` · `qna-mark` · `qna-scan` · `SessionStart` hook · `PreToolUse` 校验器 · `Stop` hook（仅增量提醒）· `tests/smoke.sh`
+装：`/qna:ask` · `qna-add` · `qna-resolve` · `qna-transcript` · `qna-scan` · `SessionStart` hook · `PreToolUse` 校验器 · `Stop` hook（仅增量提醒）· `tests/smoke.sh`
 
 不装：transcript 的 compact 恢复 · 相似度去重 · 12 条上限 · 孤儿清理以外的维护逻辑
 
@@ -731,18 +733,9 @@ Resolved #3.
 
 ### 你敲 `/qna:ask`
 
-跑 `qna-mark --on`，`PreToolUse` 校验器随即生效。跑 `qna-scan` 拿到「上次扫完之后」的对话（2916.7 KB 的 transcript 滤成 59 KB，再按水位线开窗）+ 读 pending 文件 → 合并去重 → 对账 → 分级 → 聚合 → 总览：
+跑 `qna-scan` 拿到「上次扫完之后」的对话（2916.7 KB 的 transcript 滤成 59 KB，再按水位线开窗）+ 读 pending 文件 → 合并去重 → 对账 → 分级 → 聚合 → 总览：
 
 **扫到 11 条，7 条要问。**
-
-**不用管的 · 4**
-
-| 条目 | 归属 | 依据 / 理由 |
-|---|---|---|
-| 默认 TTL → `300` 秒 | 已定 | 19:41「5 分钟就行」 |
-| `--no-cache` 已加 | 已定 | 19:38「把这个 flag 加上」 |
-| 缓存文件命名格式 | 失效 | 后端定成 SQLite，没有文件名这回事了 |
-| 命中日志 → debug 级 | 默认处理 | 琐碎，不占题，有异议叫停 |
 
 **等你拍的 · 7**
 
@@ -756,9 +749,25 @@ Resolved #3.
 | 6 | 顺手 | 要不要支持自定义缓存目录（你说过先记着） |
 | 7 | 顺手 | 缓存命中率要不要进 metrics |
 
+**不用管的 · 4**
+
+| 条目 | 归属 | 依据 / 理由 |
+|---|---|---|
+| 默认 TTL → `300` 秒 | 已定 | 19:41「5 分钟就行」 |
+| `--no-cache` 已加 | 已定 | 19:38「把这个 flag 加上」 |
+| 缓存文件命名格式 | 失效 | 后端定成 SQLite，没有文件名这回事了 |
+| 另有 2 条按默认处理 | 默认处理 | 命中日志走 debug、临时文件命名 —— 有异议叫停 |
+
 判错了直接说，我把它拽回提问队列。
 
-**两张表，不用等宽账本。** 等宽块在窄屏折行就崩，读起来像日志转储；表格能把「依据」摆成一列，对账证据不再挤在括号里。而**待问项必须自己占一张表**——和已定、失效、默认处理挤在一起，读者扫一眼分不出哪几行还等着他。按这条线切开，第一张表回答「有没有判错」，第二张表回答「还剩几件事要我拍」，两个问题各有各的读法。收尾清单同一形态（见下）。
+**两张表，待问的在前，不用等宽账本。** 等宽块在窄屏折行就崩，读起来像日志转储；表格能把「依据」摆成一列，对账证据不再挤在括号里。而**待问项必须自己占一张表且排在最前**——它是唯一向读者索要东西的部分，让人先划过一张对账账本才看到自己的待办，主次就反了。
+
+**第二张表必须短，否则它不会被读。** 两条规则划界，且都不丢真东西：
+
+- **只放判错了会让用户付代价的行**：已定（他可能不认那句原话）、失效（他可能不认前提已消失）。这两类恒占一行并带依据。而「按默认处理」是琐碎项，正是会无限繁殖的那批——超过 2 条就压成一行带计数、标题写在同格里，末尾那句「有异议叫停」已经覆盖它们。
+- **上一轮已对账过的，不再重列。** 它们按设计已从文件里删掉。这张表是**自上次扫描以来的变化**，不是累计总账——只增不减的表，到第三轮就没人看了。
+
+收尾清单同一形态（见下）。
 
 **范围闸出现**——7 条里 4 条来自本轮、3 条是之前积压的，跨了两个来源：
 
@@ -834,7 +843,7 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 
 最后那行**不是「无」**——G6.3 的措辞禁令。工具召回率只有四到六成，不能假装清干净了。
 
-然后**停住**。不追问，不动代码。扫描时发现、这轮仍未定的条目先经 `qna-add` 写进文件——它们从来没进过文件，而下一轮的窗口从这一刻之后开始，漏掉就是永久漏掉。最后两条命令：`qna-scan --mark` 推进水位线，`qna-mark --off` 撤下校验器。文件里 11 条清空 9 条，剩 2 条（`#6` 失效已删、留下的是你没拍的那些）。
+然后**停住**。不追问，不动代码。扫描时发现、这轮仍未定的条目先经 `qna-add` 写进文件——它们从来没进过文件，而下一轮的窗口从这一刻之后开始，漏掉就是永久漏掉。最后一条命令：`qna-scan --mark` 推进水位线。文件里 11 条清空 9 条，剩 2 条（`#6` 失效已删、留下的是你没拍的那些）。
 
 全程没让你打过一个字。
 
@@ -863,12 +872,11 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 │       ├── qna-add
 │       ├── qna-resolve
 │       ├── qna-transcript      原话校验器（--where）
-│       ├── qna-scan            扫描窗口：过滤 + 水位线
-│       └── qna-mark            开关 PreToolUse 校验器
+│       └── qna-scan            扫描窗口：过滤 + 水位线
 ├── specs/
 │   └── design.md               本文档
 ├── tests/
-│   └── smoke.sh                91 条断言，无依赖
+│   └── smoke.sh                84 条断言，无依赖
 ├── reinstall.sh                卸载·清缓存·重装·校验（curl 一条即可装）
 └── README.md
 ```
@@ -922,15 +930,15 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 
 ### 一切走脚本 —— 项目目录也必须注入，不能让模型算
 
-脚本路径要注入，这一条原设计就写对了。漏掉的是**另一半：`.qna/` 在哪**。原方案让模型自己拼 `${CLAUDE_PROJECT_DIR:-$PWD}/.qna/<sid>.active`，实测三处不成立：
+脚本路径要注入，这一条原设计就写对了。漏掉的是**另一半：`.qna/` 在哪**。原方案让模型自己拼 `${CLAUDE_PROJECT_DIR:-$PWD}/.qna/<sid>.md`，实测三处不成立：
 
 | 事实 | 后果 |
 |---|---|
 | 模型跑命令的那个 shell 里**没有** `CLAUDE_PROJECT_DIR`（已实测：未设置） | 路径必然回落 `$PWD`，"项目根"这个概念在写侧根本不存在 |
 | hook 侧用 payload 里的 `cwd`，与 `$PWD` 是两个独立来源 | 会话起在子目录或中途 `cd`，写侧与读侧指向不同目录 |
-| `touch` 不建父目录 | `.qna/` 尚不存在时第 0 步直接失败 |
+| 写侧要新建文件 | `.qna/` 尚不存在时，一句 shell 重定向连父目录都建不出来 |
 
-三条都通向同一个结果，而且是最坏的那种：**找不到标记 = 判定 `/qna:ask` 没在跑 = 全部放行**。R2/R4 那道硬闸整程失效，退回成纯 prompt 约束——恰是本设计最想避免的事——而且失效时没有任何提示。
+三条都通向同一个结果，而且是最坏的那种：**写侧与读侧各写各的目录，两边都「成功」，没有一处报错。** `SessionStart` 读不到既有条目，悬置清单凭空消失；`qna-scan` 读不到水位线，把整个会话重扫一遍。全都是静默的。
 
 修法一句话：**凡是要落在磁盘上的位置，都由脚本算、由注入带，模型只照抄。**
 
@@ -939,9 +947,9 @@ SessionStart 定锚一次:  find_session_dir(payload.cwd, sid)
                         已有该 session 文件的目录优先，否则用 cwd
 
 注入四条，每条都带绝对 --project:
-  QNA_ADD      记录
+  QNA_ADD      记录（并带 --transcript）
   QNA_RESOLVE  归档
-  QNA_MARK     开关校验器（--on / --off）
+  QNA_SCAN     扫描窗口 + 水位线（并带 --transcript）
   QNA_FILE     pending 文件的绝对路径，供 Read
 
 hook 读侧:  find_session_dir 按 session id 逐级向上找
@@ -949,7 +957,7 @@ hook 读侧:  find_session_dir 按 session id 逐级向上找
             撞不到别人的 .qna/（那里不会有本 session 的文件）
 ```
 
-`qna-mark` 因此成为 v1 的第四个脚本。它不是为了少打几个字——**它是把一个静默失效的口子换成一个不可能拼错的调用。**
+注入不是为了少打几个字——**它是把一个静默失效的口子换成一个不可能拼错的调用。**
 
 ### 安装
 

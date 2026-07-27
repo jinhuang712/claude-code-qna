@@ -6,10 +6,19 @@ side would have nothing but prose rules — you could not invent an alternative
 and get away with it, but you could ship a two-option yes/no question and
 nobody would stop you. This closes that gap.
 
-Scope is deliberately narrow: it only validates while /qna:ask is running,
-detected via the .active marker. Every other question in the session passes
-straight through, because these rules are right for settling a backlog and
-needlessly rigid for ordinary conversation.
+It validates every AskUserQuestion, everywhere.
+
+That is a reversal. The rules used to apply only while /qna:ask was running,
+scoped by a marker file, on the reasoning that they are right for settling a
+backlog and needlessly rigid for ordinary conversation. Then a real session
+supplied the comparison: 49 questions asked outside the command, of which the 3
+single-selects had no preview between them — nothing was enforced where the
+questions actually get answered. /qna:ask runs a few times a day; ordinary
+questions run dozens of times. Applying the strictest rules only in the rarest
+place had it backwards.
+
+The cost is real and was accepted knowingly: a question that genuinely has two
+courses of action and no third now has to find one.
 """
 
 import json
@@ -94,13 +103,6 @@ def check(questions):
 def main():
     data = qna_lib.hook_input()
     if data.get("tool_name") != "AskUserQuestion":
-        return 0
-
-    session = data.get("session_id")
-    if not session:
-        return 0
-    project = qna_lib.find_session_dir(data.get("cwd"), session)
-    if not qna_lib.marker_is_live(session, project):
         return 0
 
     tool_input = data.get("tool_input") or {}

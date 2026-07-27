@@ -9,7 +9,6 @@ Storage layout, per project:
     <project>/.qna/<session>.md        pending entries, append-only
     <project>/.qna/<session>.meta      json: transcript_path, last reported
                                        count, and the scan watermark
-    <project>/.qna/<session>.active    marker written while /qna:ask runs
 """
 
 import json
@@ -26,7 +25,6 @@ HEADER = (
 ENTRY_RE = re.compile(r"^- \[( |x)\] #(\d+) · (\S+) · (.*)$")
 FIELD_RE = re.compile(r"^  - ([A-Za-z]+): (.*)$")
 
-ACTIVE_TTL_SECONDS = 30 * 60
 ORPHAN_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
@@ -58,7 +56,7 @@ def find_session_dir(start, session, limit=8):
         d = os.path.join(cur, ".qna")
         if any(
             os.path.exists(os.path.join(d, f"{session}{ext}"))
-            for ext in (".md", ".meta", ".active")
+            for ext in (".md", ".meta")
         ):
             return cur
         parent = os.path.dirname(cur)
@@ -74,7 +72,7 @@ def qna_dir_exists(project=None):
     Hooks run in every project and must not leave a trace in the ones that
     never used the tool. Anything that only reads or updates bookkeeping checks
     this first; the directory comes into being only on a deliberate act —
-    qna-add, qna-mark --on, or qna-scan --mark.
+    qna-add or qna-scan --mark.
     """
     return os.path.isdir(os.path.join(project_dir(project), ".qna"))
 
@@ -98,10 +96,6 @@ def pending_path(session, project=None, create=True):
 
 def meta_path(session, project=None, create=True):
     return os.path.join(qna_dir(project, create), f"{session}.meta")
-
-
-def active_path(session, project=None, create=True):
-    return os.path.join(qna_dir(project, create), f"{session}.active")
 
 
 def read_entries(path):
@@ -229,21 +223,6 @@ def iter_turns(path):
                 "text": text,
                 "compacted": bool(d.get("isCompactSummary")),
             }
-
-
-def marker_is_live(session, project=None):
-    """The /qna:ask marker self-expires so an interrupted run cannot leave the
-    PreToolUse validator switched on forever."""
-    p = active_path(session, project, create=False)
-    if not os.path.exists(p):
-        return False
-    if time.time() - os.path.getmtime(p) > ACTIVE_TTL_SECONDS:
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-        return False
-    return True
 
 
 def sweep_orphans(project=None):
