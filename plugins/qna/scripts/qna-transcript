@@ -60,11 +60,17 @@ def main():
     ap.add_argument("--session", required=True)
     ap.add_argument("--project")
     ap.add_argument("--grep", required=True)
+    ap.add_argument("--transcript")
     ap.add_argument("--print-path", action="store_true")
     args = ap.parse_args()
 
-    meta = qna_lib.load_meta(args.session, args.project)
-    path = meta.get("transcript_path")
+    # An explicitly passed path wins: it comes from the hook payload via the
+    # injected command line and is current by construction. The .meta fallback
+    # covers a hand-run invocation and sessions recorded before the path was
+    # threaded through.
+    path = args.transcript or qna_lib.load_meta(
+        args.session, args.project
+    ).get("transcript_path")
     if args.print_path:
         print(path or "")
 

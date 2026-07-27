@@ -67,6 +67,17 @@ def find_session_dir(start, session, limit=8):
     return os.path.abspath(start)
 
 
+def qna_dir_exists(project=None):
+    """Whether this project has ever recorded anything.
+
+    Hooks run in every project and must not leave a trace in the ones that
+    never used the tool. Anything that only reads or updates bookkeeping checks
+    this first; only qna-add and qna-mark are allowed to bring the directory
+    into being.
+    """
+    return os.path.isdir(os.path.join(project_dir(project), ".qna"))
+
+
 def qna_dir(project=None, create=True):
     d = os.path.join(project_dir(project), ".qna")
     if create:
@@ -186,7 +197,9 @@ def marker_is_live(session, project=None):
 
 
 def sweep_orphans(project=None):
-    d = qna_dir(project)
+    if not qna_dir_exists(project):
+        return  # Nothing to sweep, and asking for the path would create it.
+    d = qna_dir(project, create=False)
     cutoff = time.time() - ORPHAN_AGE_SECONDS
     for name in os.listdir(d):
         if name == ".gitignore":

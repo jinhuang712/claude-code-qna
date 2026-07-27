@@ -30,7 +30,13 @@ def main():
         return 0
 
     project = qna_lib.find_session_dir(data.get("cwd"), session)
+    if not qna_lib.qna_dir_exists(project):
+        return 0  # Nothing has ever been parked here; leave no trace.
+
     path = qna_lib.pending_path(session, project, create=False)
+    if not os.path.exists(path):
+        return 0
+
     count = len(qna_lib.open_entries(path))
 
     meta = qna_lib.load_meta(session, project)

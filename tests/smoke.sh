@@ -105,6 +105,35 @@ ask_payload() { # <cwd> <question-json>
 
 echo "qna smoke test"
 
+# --------------------------------------------------------------- leaves no trace
+# Hooks run in every project. A project that has never recorded anything must
+# come out of a session with nothing added to it: the directory appearing
+# everywhere you happened to open a session was the bug this guards.
+printf '=== leaves no trace in an unused project\n'
+UNUSED="$WORK/unused"
+mkdir -p "$UNUSED"
+for h in session-start.py stop-count.py; do
+  printf '{"session_id":"trace-check","cwd":"%s","transcript_path":"%s"}' "$UNUSED" "$TRANSCRIPT" |
+    "$SCRIPTS/$h" >/dev/null 2>&1
+done
+printf '{"session_id":"trace-check","cwd":"%s","tool_name":"AskUserQuestion","tool_input":{"questions":[%s]}}' \
+  "$UNUSED" "$q_two" | "$SCRIPTS/pre-tool-use.py" >/dev/null 2>&1
+if [ -e "$UNUSED/.qna" ]; then
+  fail "hooks create no .qna/ in an unused project" "$(ls -a "$UNUSED/.qna")"
+else
+  pass "hooks create no .qna/ in an unused project"
+fi
+
+# ------------------------------------------------------------ document hygiene
+printf '=== documents\n'
+DOCS="$(cd "$(dirname "$0")/.." && pwd)"
+banned=$(grep -l '§' "$DOCS/plugins/qna/commands/ask.md" "$DOCS/specs/design.md" 2>/dev/null || true)
+if [ -n "$banned" ]; then
+  fail "no section-sign character in the docs" "still in: $banned"
+else
+  pass "no section-sign character in the docs"
+fi
+
 # ---------------------------------------------------------------- SessionStart
 printf '=== SessionStart\n'
 START_PAYLOAD=$(printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s","source":"startup"}' \
@@ -144,27 +173,23 @@ if printf '%s' "$INJECTED" | grep -qE '\\n *\$QNA_'; then
 else
   pass "no command line starts with \$QNA_"
 fi
-printf '%s' "$INJECTED" | grep -qF -- "$SCRIPTS/qna-add --session $SID --project $PROJ \\\\" &&
+printf '%s' "$INJECTED" |
+  grep -qF -- "$SCRIPTS/qna-add --session $SID --project $PROJ --transcript $TRANSCRIPT \\\\" &&
   pass "protocol example spells out the full qna-add line" ||
   fail "protocol example spells out the full qna-add line" "example not inlined"
 
-[ -f "$PROJ/.qna/$SID.meta" ] && pass "writes .meta" || fail "writes .meta" "absent"
-[ "$(cat "$PROJ/.qna/.gitignore" 2>/dev/null)" = "*" ] &&
-  pass ".qna/.gitignore is '*'" || fail ".qna/.gitignore is '*'" "wrong content"
-grep -qF "$TRANSCRIPT" "$PROJ/.qna/$SID.meta" &&
-  pass "records transcript_path" || fail "records transcript_path" "absent"
+printf '%s' "$INJECTED" | grep -qF -- "--transcript $TRANSCRIPT" &&
+  pass "injects the transcript path" ||
+  fail "injects the transcript path" "not in injected text"
 
-# Resolution from a nested cwd must find the existing anchor, not fork a new
-# .qna/ — this is the regression guard for the silent-bypass bug.
-printf '%s' "$(printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s","source":"resume"}' \
-  "$SID" "$PROJ/src/deep/nested" "$TRANSCRIPT")" | "$SCRIPTS/session-start.py" >/dev/null 2>&1
-[ ! -d "$PROJ/src/deep/nested/.qna" ] &&
-  pass "nested cwd does not fork a second .qna/" ||
-  fail "nested cwd does not fork a second .qna/" "created one"
+# Nothing on disk yet: the transcript path travels in the command line, so the
+# first entry can still be verified without a .meta to look it up in.
+[ ! -e "$PROJ/.qna" ] && pass "creates nothing before the first entry" ||
+  fail "creates nothing before the first entry" "$(ls -a "$PROJ/.qna")"
 
 # ---------------------------------------------------------------------- qna-add
 printf '=== qna-add\n'
-ADD="$SCRIPTS/qna-add --session $SID --project $PROJ"
+ADD="$SCRIPTS/qna-add --session $SID --project $PROJ --transcript $TRANSCRIPT"
 check "refuses one alternative" 1 "need at least 2 alternatives" \
   $ADD --title "log level" --chose debug --alt info --why w --where "src/cache.py:1"
 check "records a real file:line" 0 "Recorded #1." \
@@ -180,11 +205,26 @@ check "records something actually said" 0 "Recorded #2." \
 grep -qF "Source: user-deferred" "$PROJ/.qna/$SID.md" &&
   pass "marks --deferred-by-user" || fail "marks --deferred-by-user" "no Source line"
 
+[ "$(cat "$PROJ/.qna/.gitignore" 2>/dev/null)" = "*" ] &&
+  pass "the first entry brings a self-ignoring directory with it" ||
+  fail "the first entry brings a self-ignoring directory with it" "wrong content"
+
 # Unreadable transcript must not block recording, only flag it.
-printf '{"transcript_path":"/nonexistent/x.jsonl"}' >"$PROJ/.qna/$SID.meta"
 check "records unverified when transcript unreadable" 0 "(unverified" \
-  $ADD --title "third one" --chose A --alt B --alt C --why w --where "any phrase at all"
-printf '{"transcript_path":"%s"}' "$TRANSCRIPT" >"$PROJ/.qna/$SID.meta"
+  "$SCRIPTS/qna-add" --session "$SID" --project "$PROJ" \
+  --transcript /nonexistent/x.jsonl \
+  --title "third one" --chose A --alt B --alt C --why w --where "any phrase at all"
+
+# Once the directory exists, SessionStart does record the transcript path — and
+# from a cwd below the anchor it must land in the anchor, not fork a new one.
+printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s","source":"resume"}' \
+  "$SID" "$PROJ/src/deep/nested" "$TRANSCRIPT" | "$SCRIPTS/session-start.py" >/dev/null 2>&1
+grep -qF "$TRANSCRIPT" "$PROJ/.qna/$SID.meta" 2>/dev/null &&
+  pass "records transcript_path once the directory exists" ||
+  fail "records transcript_path once the directory exists" "absent"
+[ ! -e "$PROJ/src/deep/nested/.qna" ] &&
+  pass "nested cwd does not fork a second directory" ||
+  fail "nested cwd does not fork a second directory" "created one"
 
 # ------------------------------------------------------------------ qna-resolve
 printf '=== qna-resolve\n'

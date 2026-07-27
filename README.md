@@ -42,23 +42,20 @@ genuinely still open, and puts it to you as clickable questions — batched, in
 dependency order, each with real alternatives and a preview of where each one
 leads.
 
-```
-Scanned 11, 7 left to ask.
+**Scanned 11, 7 left to ask.**
 
-Already decided · 2
-  V  Default TTL          -> 300s  (you said "five minutes is fine")
-  V  --no-cache flag      -> yes   (you asked for it directly)
+| Bucket | Item | Evidence / why |
+|---|---|---|
+| Decided | Default TTL → `300`s | you said "five minutes is fine" |
+| Decided | `--no-cache` → yes | you asked for it directly |
+| Moot | Cache filename format | backend is SQLite now, there are no filenames |
+| By default | Cache-hit logging at debug level | trivial, say so if you disagree |
+| Ask · heavy | Cache key: include the auth identity? | — |
+| Ask · heavy | Write failure: degrade silently or warn? | — |
+| Ask · light | When expiry cleanup runs | — |
 
-No longer applies · 1
-  X  Cache filename format — backend is SQLite now, there are no filenames
-
-Handled by default · 1     trivial, say so if you disagree
-  ·  Cache-hit logging at debug level
-
-Still to ask · 7
-  1  [heavy] Should the cache key include the auth identity
-  ...
-```
+Every reconciled row carries its evidence, because that column is the only way a
+wrong "already decided" gets caught.
 
 Meanwhile, as Claude works, choices it makes on your behalf get parked in
 `.qna/<session>.md` so they are still there after a context compaction — and so
@@ -186,7 +183,7 @@ moves — and a marker written to the wrong place is indistinguishable from no
 marker at all, which reads as "not inside `/qna:ask`" and lets every question
 through unchecked.
 
-`tests/smoke.sh` asserts all of it: 47 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 50 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ## Deliberately not doing
@@ -212,6 +209,10 @@ quiet unless something fails.
 <project>/.qna/<session>.meta  transcript path, plus the last count reported
 <project>/.qna/<session>.active  qna-mark's marker, live only while /qna:ask runs
 ```
+
+The directory appears only when something is actually recorded. The hooks run in
+every project you open, so they check for it and write nothing if it is absent —
+otherwise every project you ever started a session in would collect an empty one.
 
 Files untouched for 30 days are swept at session start.
 

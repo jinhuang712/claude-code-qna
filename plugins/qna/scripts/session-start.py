@@ -123,27 +123,35 @@ def main():
     project = qna_lib.find_session_dir(data.get("cwd"), session)
     transcript = data.get("transcript_path")
 
-    meta = qna_lib.load_meta(session, project)
-    if transcript:
+    # Only projects that have actually recorded something get a .qna/. This hook
+    # runs everywhere, and creating the directory here littered one into every
+    # project a session was ever opened in. The transcript path reaches qna-add
+    # through the injected command line instead, so nothing needs to be on disk
+    # before the first entry.
+    if transcript and qna_lib.qna_dir_exists(project):
+        meta = qna_lib.load_meta(session, project)
         meta["transcript_path"] = transcript
-    qna_lib.save_meta(session, meta, project)
+        qna_lib.save_meta(session, meta, project)
 
     try:
         qna_lib.sweep_orphans(project)
     except Exception:
         pass
 
-    def cmd(name):
+    def cmd(name, transcript_too=False):
         # Quoted: a plugin cache path or project path containing a space would
         # otherwise inject a command that splits into the wrong arguments.
-        return "{} --session {} --project {}".format(
+        line = "{} --session {} --project {}".format(
             shlex.quote(os.path.join(HERE, name)),
             shlex.quote(session),
             shlex.quote(project),
         )
+        if transcript_too and transcript:
+            line += " --transcript {}".format(shlex.quote(transcript))
+        return line
 
     text = PROTOCOL.format(
-        add=cmd("qna-add"),
+        add=cmd("qna-add", transcript_too=True),
         resolve=cmd("qna-resolve"),
         # No "--on|--off" suffix here: an unquoted pipe in an injected command
         # line is a shell pipe, not documentation.

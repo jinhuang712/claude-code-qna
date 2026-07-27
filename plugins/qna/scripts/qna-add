@@ -44,7 +44,7 @@ NOT_SAID = (
 FILE_LINE_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+)$")
 
 
-def resolve_where(where, session, project):
+def resolve_where(where, session, project, transcript):
     """Returns (kind, verified) or raises SystemExit with a refusal.
 
     kind is "code" or "said"; verified is "yes" or "unverified".
@@ -69,6 +69,10 @@ def resolve_where(where, session, project):
             where,
         ]
         + (["--project", project] if project else [])
+        # Passed straight through from the injected command line, so quote
+        # verification works on the very first entry in a project — before
+        # anything exists on disk to look the path up in.
+        + (["--transcript", transcript] if transcript else [])
     )
     if rc == 0:
         return "said", "yes"
@@ -93,6 +97,7 @@ def main():
     ap.add_argument("--alt", action="append", default=[])
     ap.add_argument("--why", required=True)
     ap.add_argument("--where", required=True)
+    ap.add_argument("--transcript")
     ap.add_argument("--deferred-by-user", action="store_true")
     args = ap.parse_args()
 
@@ -105,7 +110,9 @@ def main():
     if not args.where.strip():
         return refuse(BAD_WHERE)
 
-    _, verified = resolve_where(args.where, args.session, args.project)
+    _, verified = resolve_where(
+        args.where, args.session, args.project, args.transcript
+    )
 
     path = qna_lib.pending_path(args.session, args.project)
     entry_id = qna_lib.next_id(path)

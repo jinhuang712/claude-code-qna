@@ -36,10 +36,17 @@ the working directory can move, so a hand-built path may not be the one the
 hooks read — and a marker written somewhere else is indistinguishable from no
 marker at all: every question would pass unchecked, silently.
 
-If `QNA_MARK` is not in your context, SessionStart did not run in this session
-(the plugin was installed mid-session). Say so, and that the question validator
-is off for this run, then carry on — the rules below still apply, they are just
-not enforced.
+If `QNA_MARK` is not in your context, SessionStart did not run — the plugin
+arrived mid-session. **Open with one flat line and go straight on:**
+
+```
+没有找到历史上下文，本轮只扫对话。
+```
+
+That is the whole notice. No explanation of why, no advice about restarting, and
+no mention of hooks, markers, injection or validators — those are plumbing, and
+the person reading came here to be asked questions. The rules below still apply;
+they are simply unenforced this run.
 
 ## 1. Scan
 
@@ -79,7 +86,10 @@ material. Filtering only the low-recall path is worse than not filtering.
    than shrug and say "obviously"?
 
 Never a question: naming, log wording, file placement, comments, fixture
-values, formatting, anything with one reasonable implementation.
+values, formatting, anything with one reasonable implementation, and **anything
+re-chosen per invocation rather than settled once** — which mode, which env,
+which flag this run. If the answer is remade every time the thing runs, there is
+nothing to settle.
 
 Three further gates specific to scanning, which works directly on the user's
 own words:
@@ -138,32 +148,27 @@ last few turns right now.
 
 ## 5. Overview
 
-One screen, four sections, then go straight into the first question — no
-confirmation step.
+A count, then **one markdown table, one row per item**, then straight into the
+first question — no confirmation step. Never a fenced block of aligned monospace
+text: it reads as a ledger dump and it wraps badly.
 
-```
-Scanned 11, 7 left to ask.
+**Scanned 11, 7 left to ask.**
 
-Already decided · 2
-  V  Default TTL          -> 300s  (you said "five minutes is fine")
-  V  --no-cache flag      -> yes   (you asked for it directly)
+| Bucket | Item | Evidence / why |
+|---|---|---|
+| Decided | Default TTL → `300`s | you said "five minutes is fine" |
+| Decided | `--no-cache` → yes | you asked for it directly |
+| Moot | Cache filename format | backend is SQLite now, there are no filenames |
+| By default | Cache-hit logging at debug level | trivial, say so if you disagree |
+| Ask · heavy | Cache key: include the auth identity? | — |
+| Ask · heavy | Write failure: degrade silently or warn? | — |
+| Ask · light | When expiry cleanup runs | — |
 
-No longer applies · 1
-  X  Cache filename format — backend is SQLite now, there are no filenames
+Close with one line inviting corrections. Reconciled rows always carry the
+evidence — the user's own words for decided, the reason for moot. That column is
+the only way a wrong call gets caught, so it is never left blank.
 
-Handled by default · 1     trivial, say so if you disagree
-  ·  Cache-hit logging at debug level
-
-Still to ask · 7
-  1  [heavy] Should the cache key include the auth identity
-  2  [heavy] Silent degradation or a warning when a write fails
-  ...
-
-Tell me if I got any of these wrong and I will put it back in the queue.
-```
-
-If the session has been compacted, note at the top that earlier conversation
-was compressed and may be missing.
+If the session has been compacted, say so above the table.
 
 ## 6. Scope gate
 
@@ -211,7 +216,9 @@ anything, you have not worked out where that option leads.
 **R5 — A heavy question's explanation fits on one screen.** Around 150 words.
 Everything else goes into the option descriptions and previews. Compressing the
 explanation is only legitimate because the detail moves somewhere; if it has
-nowhere to go, you are deleting it.
+nowhere to go, you are deleting it. **Between batches, write nothing** — no
+recap, no re-evaluation essay, no "next up". The overview is the only narration
+in the whole command; everything else the user needs is inside the options.
 
 **R6 — Re-evaluate after every heavy answer.** Strike what is now moot and say
 why, rewrite what changed shape, add what the answer surfaced. Update the
@@ -232,24 +239,17 @@ when you do, move what would have been in the preview into the descriptions.
 
 Print the decision list and **stop**. No "shall I start?", no edits.
 
-```
-Decided
-  Cache backend   SQLite           follow-on: concurrent writes, enable WAL
-  Cache key       token fingerprint  follow-on: cache dir splits per token
-  ...
+Same shape as the overview: one table, one row per item, no monospace ledger.
 
-Handled by default
-  Cache-hit logging at debug level
+| Bucket | Item | Result / why |
+|---|---|---|
+| Decided | Cache backend | `SQLite` — follow-on: concurrent writes, enable WAL |
+| Decided | Cache key | token fingerprint — follow-on: cache dir splits per token |
+| By default | Cache-hit logging | debug level |
+| Moot | Cache filename format | backend changed to SQLite |
+| Untouched | `#9` metrics for cache hit rate | outside the scope you picked |
 
-No longer applies
-  Cache filename format (backend changed to SQLite)
-
-Not touched this time
-  #9  Metrics for cache hit rate
-
-Still open
-  Nothing else surfaced in this scan
-```
+Then one closing line for what is still open.
 
 Two wording rules, both aimed at the same risk — that the user reads this list
 as everything outstanding, when recall is partial by design:
