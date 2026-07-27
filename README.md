@@ -164,8 +164,9 @@ bash reinstall.sh --local      # force working tree
                      recorded?       ->  re-surface the protocol,
                                          every 15 replies
 
-       Both lines are shown to you, not just to Claude — so neither
-       asks Claude to repeat them back.
+       Both lines reach you, not just Claude. They ask to be hidden
+       (suppressOutput), and are written short in case that is not
+       honoured — and neither asks Claude to repeat them back.
 ```
 
 ### Enforce in code what code can enforce
@@ -228,7 +229,7 @@ Claude runs commands in has no `CLAUDE_PROJECT_DIR` and the working directory
 moves — and a file written to the wrong place fails without failing: the pending
 list silently reads as empty, and the scan silently re-reads the whole session.
 
-`tests/smoke.sh` asserts all of it: 90 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 92 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ### Reading the conversation without reading the transcript

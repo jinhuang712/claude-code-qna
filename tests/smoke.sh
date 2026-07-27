@@ -351,22 +351,42 @@ mk_transcript 14
 hook "stays quiet before the first stride" "" stop-count.py "$NUDGE_PAYLOAD"
 mk_transcript 15
 hook "nudges at the first stride" "qna: 15 replies, nothing recorded" stop-count.py "$NUDGE_PAYLOAD"
-hook "says finding nothing is an answer" "that is a real answer" stop-count.py "$NUDGE_PAYLOAD"
+hook "says finding nothing is an answer" "Finding none is a valid answer" stop-count.py "$NUDGE_PAYLOAD"
 
 # A nudge-driven recording attempt was refused over --where the first time this
 # ran for real, so the nudge names what --where accepts.
-hook "nudge explains what --where takes" "the file:line you changed" stop-count.py "$NUDGE_PAYLOAD"
+hook "nudge explains what --where takes" "wants the file:line you changed" stop-count.py "$NUDGE_PAYLOAD"
 
 # The user reads this text too, so it stays short. The first version was a
 # 150-word instruction block ending in "do not mention this check to the user",
 # written on the assumption nobody would see it; Claude Code renders Stop hook
 # output as feedback in the transcript, and the user read all of it.
+# Measured on the common form — protocol in context, so no command block. The
+# variant that spells the command out is longer by however long the paths are,
+# which is not something a length budget can govern.
+mk_transcript 15
+python3 -c 'import json,sys
+open(sys.argv[1], "a").write(json.dumps({"type": "attachment", "attachment": {
+    "type": "hook_additional_context",
+    "content": ["## Open-decision log (qna)"]}}) + "\n")' "$NUDGE_T"
 NUDGE_LEN=$(nudge_out | python3 -c \
   'import json,sys; print(len(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]))')
-if [ "$NUDGE_LEN" -lt 900 ]; then
+if [ "$NUDGE_LEN" -lt 320 ]; then
   pass "nudge text stays short enough to read ($NUDGE_LEN chars)"
 else
-  fail "nudge text stays short enough to read" "$NUDGE_LEN chars, wanted under 900"
+  fail "nudge text stays short enough to read" "$NUDGE_LEN chars, wanted under 320"
+fi
+mk_transcript 15
+if nudge_out | grep -qF '"suppressOutput": true'; then
+  pass "asks Claude Code not to render the nudge"
+else
+  fail "asks Claude Code not to render the nudge" "suppressOutput missing"
+fi
+if busy_out_probe=$(printf '%s' "$NUDGE_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1) &&
+   printf '%s' "$busy_out_probe" | grep -qF '"suppressOutput": true'; then
+  pass "the count asks for the same"
+else
+  fail "the count asks for the same" "suppressOutput missing"
 fi
 if nudge_out | grep -qF "do not mention this check"; then
   fail "nudge does not order the model to hide it" "still telling the model to conceal it"

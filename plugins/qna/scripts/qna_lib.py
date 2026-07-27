@@ -263,15 +263,22 @@ def hook_input():
         return {}
 
 
-def emit(event, context):
-    """Emit additionalContext for a hook that supports it."""
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": event,
-                    "additionalContext": context,
-                }
-            }
-        )
-    )
+def emit(event, context, suppress=False):
+    """Emit additionalContext for a hook that supports it.
+
+    suppress asks Claude Code not to render the output in the transcript. It
+    matters because a Stop hook's additionalContext turns out to be shown to the
+    user as "Stop hook feedback" — the reminders here are written for the model,
+    and one of them was read by a user who reasonably found it baffling. The flag
+    is set alongside text short enough to survive being displayed anyway, since
+    whether it is honoured for this path is not something we can prove from here.
+    """
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "additionalContext": context,
+        }
+    }
+    if suppress:
+        payload["suppressOutput"] = True
+    print(json.dumps(payload))

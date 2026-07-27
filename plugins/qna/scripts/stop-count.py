@@ -122,17 +122,15 @@ def nudge(session, project, transcript):
     if turns - last < NUDGE_EVERY:
         return 0
 
-    # Short and plain: the user reads this too. The three bars collapse into the
-    # one that does the work — reversal cost is what separates a decision from an
-    # implementation detail, and it is the one a model misjudges least often.
+    # One line. The three bars collapse into the one that does the work — reversal
+    # cost is what separates a decision from an implementation detail — and the
+    # --where hint rides along because the first nudge that did produce a
+    # recording attempt lost it to a paraphrased citation.
     text = (
-        f"qna: {turns} replies, nothing recorded in this session. Look back for a "
-        f"choice you made on the user's behalf that would cost real work to "
-        f"reverse. Record it with QNA_ADD if you find one; if you do not, that is "
-        f"a real answer — say nothing and carry on.\n\n"
-        f"--where takes the file:line you changed, or words the user said "
-        f"verbatim. Recalling a paraphrase will be refused; the file is the "
-        f"easier of the two this long after the fact."
+        f"qna: {turns} replies, nothing recorded. If you made a call on the "
+        f"user's behalf that would cost real work to reverse, record it with "
+        f"QNA_ADD (--where wants the file:line you changed, or their words "
+        f"verbatim — not a paraphrase). Finding none is a valid answer."
     )
     if not protocol:
         add = "{} --session {} --project {}".format(
@@ -148,7 +146,7 @@ def nudge(session, project, transcript):
             f"--alt <one> --alt <another> --why <the tradeoff> "
             f"--where <file:line or words actually said>"
         )
-    qna_lib.emit("Stop", text)
+    qna_lib.emit("Stop", text, suppress=True)
     return 0
 
 
@@ -202,7 +200,7 @@ def main():
     else:
         body = f'{count} decisions recorded here and still open, newest ' \
                f'"{newest}". /qna:ask turns them into clickable questions.'
-    qna_lib.emit("Stop", f"qna: {body} No need to relay this line.")
+    qna_lib.emit("Stop", f"qna: {body} No need to relay this line.", suppress=True)
     return 0
 
 
