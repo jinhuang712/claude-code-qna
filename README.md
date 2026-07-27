@@ -128,6 +128,11 @@ bash reinstall.sh --local      # force working tree
                     qna-scan  <-- transcript, minus 97% tool traffic
                         |           starting after the last scan
                         v
+                     filter --> qna-add --found-by-scan
+                        |          |   same refusals as above:
+                        |          |   a refusal means it was
+                        |          |   never a decision -> dropped
+                        v          v
                     reconcile --> settled / moot --> shown, not asked
                         |
                         v
@@ -147,14 +152,15 @@ bash reinstall.sh --local      # force working tree
                         v
                   decision list --> stop
                         |
-                        +-> still-open scan finds --> qna-add
-                        |
               qna-scan --mark                next scan starts here
               qna-mark --off                 validator stood down
 
   ============  at the end of a turn  ============
        Stop hook --> count changed?  ->  "qna: 3 parked"
                      unchanged       ->  silence
+                     nothing ever
+                     recorded?       ->  re-surface the protocol
+                                         at 15 / 45 / 90 replies
 ```
 
 ### Enforce in code what code can enforce
@@ -165,7 +171,7 @@ of instruction a model drifts away from, so neither is left as an instruction.
 
 | Enforced by scripts and hooks | Left to the model |
 |---|---|
-| At least two alternatives per entry | Whether something counts as a decision |
+| At least two alternatives per entry — including the ones the scan finds, which go through the same `qna-add` | Whether something counts as a decision |
 | `--where` resolves to a real file:line **or** words actually said in the conversation | Whether the conversation has settled it |
 | Archiving requires quoting the user | |
 | Three to four options per question — two is enough for a multi-select, where two boxes answer neither/A/B/both | |
@@ -210,7 +216,7 @@ moves — and a marker written to the wrong place is indistinguishable from no
 marker at all, which reads as "not inside `/qna:ask`" and lets every question
 through unchecked.
 
-`tests/smoke.sh` asserts all of it: 83 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 91 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ### Reading the conversation without reading the transcript

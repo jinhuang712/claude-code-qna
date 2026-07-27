@@ -99,6 +99,12 @@ def main():
     ap.add_argument("--where", required=True)
     ap.add_argument("--transcript")
     ap.add_argument("--deferred-by-user", action="store_true")
+    # Provenance matters and must not be faked. An entry written the moment the
+    # choice was made carries alternatives that were genuinely weighed; one
+    # reconstructed later at /qna:ask time carries alternatives thought up after
+    # the fact. Both clear the same bar, and the file says which is which — G2.3
+    # is the reason qna-add exists, so it cannot quietly launder the difference.
+    ap.add_argument("--found-by-scan", action="store_true")
     args = ap.parse_args()
 
     alts = [a.strip() for a in args.alt if a.strip()]
@@ -125,7 +131,8 @@ def main():
             alts,
             args.why,
             args.where,
-            "user-deferred" if args.deferred_by_user else "agent",
+            ("user-deferred" if args.deferred_by_user
+             else "scan" if args.found_by_scan else "agent"),
             verified,
         ),
     )

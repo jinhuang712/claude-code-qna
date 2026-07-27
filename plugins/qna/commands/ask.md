@@ -92,11 +92,28 @@ things to note.
 is your only source. This is where anything still open from before the watermark
 lives, so read it even when the window comes back empty.
 
-## 2. Filter
+## 2. Filter, and record what survives
 
-Apply the same three tests the recording side uses — the scan has no script
-backing it, so this is the only place the filtering happens for conversational
-material. Filtering only the low-recall path is worse than not filtering.
+Apply the same three tests the recording side uses, and then **put every
+survivor through `QNA_ADD` with `--found-by-scan` appended** — one call each, for
+anything not already in the file.
+
+That is not bookkeeping, it is the filter. Judging alternatives, cost and
+surprise in your head is exactly the check that drifts; `qna-add` refuses an
+entry you cannot name two real alternatives for, or whose `--where` does not
+resolve to a real `file:line` or words actually said. **A refusal is the
+answer** — that item was not a decision, so drop it and do not work around it.
+Without this, the conversational half of the scan is the one path with no script
+behind it, and filtering only the half that already has a hard gate is worse than
+not filtering.
+
+`--found-by-scan` marks the provenance and is not optional. An entry recorded as
+the choice was made carries alternatives that were genuinely weighed; one
+reconstructed here carries alternatives you thought up just now. Both clear the
+same bar. The file has to say which is which.
+
+For a scan find, `--chose` is what happens if nobody decides — the current
+leaning, or the status quo it drifts into.
 
 1. **Alternatives** — can you name two options a competent engineer might
    genuinely prefer?
@@ -160,6 +177,9 @@ what is left:
   "handled by default" in the overview, one line each
 - Items recorded with `Source: user-deferred` are **never** demoted this way.
   The user asked for those explicitly.
+- `Source: agent` outranks `Source: scan` when the two describe the same thing.
+  One was written while the choice was being made; the other was reconstructed
+  minutes ago. Keep the earlier entry and its alternatives.
 
 **Order by dependency first, recency second.** Whatever changes later questions
 goes first; among peers, the most recent wins, because the user is reading the
@@ -260,12 +280,22 @@ worked example. Restating the label is filler and worse than nothing. There is
 no such thing as an option with nothing to show — if you cannot think of
 anything, you have not worked out where that option leads.
 
-**R5 — A heavy question's explanation fits on one screen.** Around 150 words.
-Everything else goes into the option descriptions and previews. Compressing the
-explanation is only legitimate because the detail moves somewhere; if it has
-nowhere to go, you are deleting it. **Between batches, write nothing** — no
-recap, no re-evaluation essay, no "next up". The overview is the only narration
-in the whole command; everything else the user needs is inside the options.
+**R5 — A heavy question is explained before it is asked.** Prose, in the same
+turn, immediately above the tool call: what is in question, why it is in question
+now, and what turns on it. Around 150 words, one screen. Everything else goes
+into the option descriptions and previews — compressing the explanation is only
+legitimate because the detail moves somewhere; if it has nowhere to go, you are
+deleting it.
+
+**What is banned between batches is narration about the process** — recap of
+what was just answered, a re-evaluation essay, "next up", "good, moving on". A
+heavy question's own explanation is none of those. It is part of the question.
+Dropping it does not make the command terser, it makes the question
+unanswerable: the user is left reconstructing the stakes from three previews,
+each written for a different option, none of them stating the shared premise.
+
+A question that arrives with no framing is the failure this rule exists to
+prevent, and it is worse than a wordy one.
 
 **R6 — Re-evaluate after every heavy answer.** Strike what is now moot and say
 why, rewrite what changed shape, add what the answer surfaced. Update the
@@ -322,11 +352,8 @@ Then clean up the file:
 - Skipped because of the scope gate: **keep** — the user never ruled on them
 - Left deliberately open (the user chose Other and said "let me think"): keep
 
-**Anything still open that you found by scanning goes into the file via
-`QNA_ADD`** — one call each, before you touch anything else here. Those items
-were never recorded: the recording scripts capture decisions you made, not
-questions you raised. The file is the only memory that survives, and the next
-run's window starts after this turn, so an open item left out of it is gone.
+Scan finds are already in the file — step 2 put them there, which is also why
+nothing can be left behind when the window moves past this turn.
 
 Finally, two commands, in this order:
 

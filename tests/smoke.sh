@@ -325,6 +325,73 @@ hook "stays silent at zero" "" stop-count.py \
 hook "counts from a nested cwd" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "$SID" "$PROJ/src/deep/nested")"
 
+# ------------------------------------------------------- unrecorded-work nudge
+printf '=== unrecorded-work nudge\n'
+# The protocol is injected once and never mentioned again. Measured on a real
+# session: 84 conversation turns, 49 questions asked, qna-add run zero times,
+# and this hook silent throughout because the count never left zero.
+NUDGE_PROJ="$WORK/nudgeproj"
+NUDGE_T="$WORK/nudge.jsonl"
+mkdir -p "$NUDGE_PROJ"
+mk_replies() { # <count> — plus a tool-call entry each, which must not be counted
+  python3 - "$NUDGE_T" "$1" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as f:
+    for i in range(int(sys.argv[2])):
+        f.write(json.dumps({"type": "assistant", "uuid": f"a{i}",
+                            "timestamp": "2026-07-27T01:00:00Z",
+                            "message": {"role": "assistant",
+                                        "content": [{"type": "text", "text": "reply"}]}}) + "\n")
+        f.write(json.dumps({"type": "assistant", "uuid": f"t{i}",
+                            "timestamp": "2026-07-27T01:00:00Z",
+                            "message": {"role": "assistant",
+                                        "content": [{"type": "tool_use", "name": "Bash",
+                                                     "input": {}}]}}) + "\n")
+PY
+}
+NUDGE_PAYLOAD=$(printf '{"session_id":"nudged","cwd":"%s","transcript_path":"%s"}' \
+  "$NUDGE_PROJ" "$NUDGE_T")
+
+mk_replies 14
+hook "stays quiet before the first milestone" "" stop-count.py "$NUDGE_PAYLOAD"
+mk_replies 15
+hook "nudges at the first milestone" "nothing has been parked" stop-count.py "$NUDGE_PAYLOAD"
+hook "spells out the qna-add line" "qna-add --session nudged --project $NUDGE_PROJ" \
+  stop-count.py "$NUDGE_PAYLOAD"
+hook "says finding nothing is an answer" "that is a real answer" stop-count.py "$NUDGE_PAYLOAD"
+
+# Nudges are counted out of the transcript, so having sent one is remembered
+# without writing anywhere — a Stop hook with nowhere safe to write is why this
+# hook was silent in the first place.
+python3 - "$NUDGE_T" <<'PY'
+import json, sys
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps({"type": "attachment", "attachment": {
+        "type": "hook_additional_context",
+        "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
+PY
+hook "does not nudge twice at the same milestone" "" stop-count.py "$NUDGE_PAYLOAD"
+if [ -e "$NUDGE_PROJ/.qna" ]; then
+  fail "nudging leaves no .qna/ behind" "$(ls -a "$NUDGE_PROJ/.qna" | tr '\n' ' ')"
+else
+  pass "nudging leaves no .qna/ behind"
+fi
+
+# A session that has recorded something takes the counting path, however long it
+# runs — the nudge is for the case where the protocol was never acted on at all.
+RECORDED="$WORK/recorded"
+mkdir -p "$RECORDED"
+"$SCRIPTS/qna-add" --session busy --project "$RECORDED" --transcript "$TRANSCRIPT" \
+  --title "already parked" --chose "a" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null
+BUSY_PAYLOAD=$(printf '{"session_id":"busy","cwd":"%s","transcript_path":"%s"}' \
+  "$RECORDED" "$NUDGE_T")
+hook "a session with entries gets the count" "1 decision(s) parked" stop-count.py "$BUSY_PAYLOAD"
+if printf '%s' "$BUSY_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1 | grep -qF "$(printf 'unrecorded-nudge')"; then
+  fail "a session with entries is never nudged" "got the nudge as well as the count"
+else
+  pass "a session with entries is never nudged"
+fi
+
 # ------------------------------------------------------------- orphan sweeping
 printf '=== orphan sweep\n'
 # A swept-clean directory that stays behind is litter outliving its reason. Seen
