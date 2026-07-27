@@ -87,6 +87,20 @@ things to note.
 is your only source. This is where anything still open from before the watermark
 lives, so read it even when the window comes back empty.
 
+**Earlier sessions in this same project.** If SessionStart listed a section
+headed "Still open here from an earlier session", those items are in scope and
+their file paths are printed there — `Read` each one. They were parked in this
+directory about this code and nobody has ruled on them; the only thing that
+makes them different is that the session which wrote them ended. Seven of them
+sat unreachable in one project because nothing read them, which is why they are
+surfaced at all.
+
+Two things they need that this session's own items do not: their ids belong to
+their own file, so keep them labelled by session in the tables, and settling one
+means running `QNA_RESOLVE` with **that** session's id, exactly as SessionStart
+spelled it out. Never re-park one under this session — that leaves the same
+question open in two files, and closing one does not close the other.
+
 ## 2. Filter, and record what survives
 
 Apply the same three tests the recording side uses, and then **put every
@@ -325,9 +339,23 @@ Default to single-select, which is what makes previews available. Use
 `multiSelect` only when the answer genuinely can be several things at once, and
 when you do, move what would have been in the preview into the descriptions.
 
-## 8. Wrap up
+## 8. Write the answers back
 
-Print the decision list and **stop**. No "shall I start?", no edits.
+**Before anything else, run `QNA_RESOLVE` for every question the user just
+answered**, one call each, with their own words in `--quote`.
+
+This step has been skipped in full, and it is the most expensive failure this
+command has: a real run parked seven items, asked about four, got four answers,
+resolved none, and then advanced the watermark past the turns those answers were
+given in. The answers still exist in the transcript, but no scan will ever reach
+them again and no file records them. The user spent an hour deciding and nothing
+kept the decisions.
+
+So the order is fixed and nothing may come between the links: **resolve, then
+report, then act, then mark.** An answer you are holding in your head is not
+recorded, and this is the only turn in which you know it.
+
+## 9. Report, then do the work
 
 Same two-table shape as the overview, no monospace ledger — what is now closed,
 and what is not.
@@ -357,6 +385,28 @@ as everything outstanding, when recall is partial by design:
   surfaced in this scan.
 - Never write "all", "everything", "that's all", or "nothing else".
 
+**Then carry out what the answers decided, in the same turn.** A decision that
+changes nothing is not settled, it is filed — and filing is what the user came
+here to stop doing.
+
+Three rules, all of them from the same observed run:
+
+- **Never end on a request for permission.** "你点头，我就开始写" is how that
+  session finished, and the nod never came. The user answered four questions
+  precisely so that no further approval would be needed; asking for one anyway
+  spends their answers and gives nothing back. If a follow-on is genuinely
+  yours to call, call it and park it with `QNA_ADD` — that is the whole premise
+  of this plugin.
+- **Do the work, not a plan of the work.** The follow-on column in the table
+  above is the to-do list. Work it.
+- **When an answer decides nothing that needs doing, say so in one line.**
+  Some answers only confirm the status quo. That is a real outcome, and stating
+  it is not the same as stopping.
+
+Two things do stop you, and only these two: work the user put outside the scope
+gate, and work that is destructive or irreversible in the way `N3` describes.
+Both get named in the closing line rather than silently skipped.
+
 Then clean up the file:
 
 - Settled and moot items: remove
@@ -375,5 +425,6 @@ user just spent asking and answering fall behind it — an open item from those
 turns that is not in the file is not merely missed, it is unreachable.
 
 Finally, `QNA_SCAN` with `--mark` appended: it records this scan's endpoint so
-the next run starts here. Last of everything, because an interrupted run must
-re-read this stretch rather than skip it.
+the next run starts here. Last of everything, after the work as well as after
+the writing — an interrupted run must re-read this stretch rather than skip it,
+and a run that reported the answers but never acted on them is interrupted.

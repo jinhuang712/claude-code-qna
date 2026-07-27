@@ -118,7 +118,7 @@ echo "qna smoke test"
 printf '=== leaves no trace in an unused project\n'
 UNUSED="$WORK/unused"
 mkdir -p "$UNUSED"
-for h in session-start.py stop-count.py; do
+for h in session-start.py prompt-nudge.py stop-count.py; do
   printf '{"session_id":"trace-check","cwd":"%s","transcript_path":"%s"}' "$UNUSED" "$TRANSCRIPT" |
     "$SCRIPTS/$h" >/dev/null 2>&1
 done
@@ -291,29 +291,99 @@ hook "validates with no session id at all" "yes/no question in disguise" pre-too
   "$(printf '{"cwd":"%s","tool_name":"AskUserQuestion","tool_input":{"questions":[%s]}}' "$PROJ" "$q_two")"
 
 # ------------------------------------------------------------------- Stop hook
-printf '=== Stop hook\n'
+printf '=== Stop hook (the only output a person sees)\n'
 STOP_PAYLOAD=$(printf '{"session_id":"%s","cwd":"%s"}' "$SID" "$PROJ")
+STOP_NESTED=$(printf '{"session_id":"%s","cwd":"%s"}' "$SID" "$PROJ/src/deep/nested")
+
+# additionalContext travels as JSON with non-ASCII escaped, so every assertion
+# below runs against the decoded text rather than the wire form.
+stop_ctx() { # <payload>
+  printf '%s' "$1" | "$SCRIPTS/stop-count.py" 2>&1 | python3 -c 'import json, sys
+raw = sys.stdin.read().strip()
+print(json.loads(raw)["hookSpecificOutput"]["additionalContext"] if raw else "", end="")'
+}
+in_out() { # <name> <substring> <text>
+  if printf '%s' "$3" | grep -qF -- "$2"; then
+    pass "$1"
+  else
+    fail "$1" "missing '$2' — got: $3"
+  fi
+}
+not_in_out() { # <name> <substring> <text>
+  if printf '%s' "$3" | grep -qF -- "$2"; then
+    fail "$1" "still there: '$2'"
+  else
+    pass "$1"
+  fi
+}
+forget_reports() {
+  python3 - "$PROJ/.qna/$SID.meta" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d.pop("reported_count", None)
+d.pop("reported_max_id", None)
+json.dump(d, open(sys.argv[1], "w"))
+PY
+}
+
+forget_reports
+FIRST=$(stop_ctx "$STOP_PAYLOAD")
+in_out "names the entry rather than counting it" "qna parked #2 — custom cache dir" "$FIRST"
+# The title is a question. Without what was picked, the reader has something to
+# think about and nothing to think with — and no way to settle it by shrugging.
+in_out "carries what was chosen meanwhile" "going with: hardcode XDG" "$FIRST"
+in_out "announces every new entry, not only the newest" "qna parked #3 — third one" "$FIRST"
+in_out "ends with how many are open" "/qna:ask to settle · 2 open" "$FIRST"
+# Both instructions that have been sent down this channel: one told the model to
+# repeat the line, which printed it twice; the other told it not to, which is
+# still the user reading a note addressed to someone else.
+not_in_out "does not ask the model to relay it" "Surface this" "$FIRST"
+not_in_out "does not address the model at all" "No need to relay" "$FIRST"
+
+hook "silent when nothing new was parked" "" stop-count.py "$STOP_PAYLOAD"
+
+# Settling is news to nobody: the user just did it. The old version reported a
+# level rather than a change, so resolving one item printed a line about a
+# different item that had been sitting there for an hour.
+$RESOLVE 2 --result "no custom dir" --quote "use SQLite" >/dev/null
+hook "silent when an entry is settled" "" stop-count.py "$STOP_PAYLOAD"
+
+# A new entry seen from a cwd below the anchor still finds the same file.
+$ADD --title "fourth one" --chose "keep the default" --alt B --alt C \
+  --why w --where "src/cache.py:1" >/dev/null
+NESTED_OUT=$(stop_ctx "$STOP_NESTED")
+in_out "reports from a nested cwd" "qna parked #4 — fourth one" "$NESTED_OUT"
+in_out "counts only what is still open" "/qna:ask to settle · 2 open" "$NESTED_OUT"
+
+# Parked and settled inside one turn: never worth announcing, and announcing it
+# on the next turn instead would be worse than saying nothing.
+$ADD --title "fifth one" --chose A --alt B --alt C --why w --where "src/cache.py:1" >/dev/null
+$RESOLVE 5 --result "settled at once" --quote "use SQLite" >/dev/null
+hook "silent for an entry settled in the same turn" "" stop-count.py "$STOP_PAYLOAD"
+$ADD --title "sixth one" --chose A --alt B --alt C --why w --where "src/cache.py:1" >/dev/null
+SIXTH=$(stop_ctx "$STOP_PAYLOAD")
+in_out "the next entry is still announced" "qna parked #6 — sixth one" "$SIXTH"
+not_in_out "the settled one is not announced late" "fifth one" "$SIXTH"
+
+# Bookkeeping written by an older version: those entries were already reported
+# under it, so the first run of this one says nothing instead of replaying them.
 python3 - "$PROJ/.qna/$SID.meta" <<'PY'
 import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d.pop("reported_count", None)
-json.dump(d, open(p, "w"))
+d = json.load(open(sys.argv[1]))
+d.pop("reported_max_id", None)
+d["reported_count"] = 2
+json.dump(d, open(sys.argv[1], "w"))
 PY
-hook "reports the first time" "2 decisions recorded here and still open" stop-count.py "$STOP_PAYLOAD"
-hook "stays silent when unchanged" "" stop-count.py "$STOP_PAYLOAD"
-$RESOLVE 2 --result "no custom dir" --quote "use SQLite" >/dev/null
-hook "reports again when the count changes" "1 decision recorded here and still open" stop-count.py "$STOP_PAYLOAD"
-hook "stays silent at zero" "" stop-count.py \
+hook "an upgraded session does not replay its backlog" "" stop-count.py "$STOP_PAYLOAD"
+
+hook "silent in a session with no entries" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "empty-session" "$PROJ")"
-hook "counts from a nested cwd" "" stop-count.py \
-  "$(printf '{"session_id":"%s","cwd":"%s"}' "$SID" "$PROJ/src/deep/nested")"
 
 # ------------------------------------------------------- unrecorded-work nudge
 printf '=== unrecorded-work nudge\n'
 # The protocol is injected once and never mentioned again. Measured on a real
 # session: 84 conversation turns, 49 questions asked, qna-add run zero times, and
-# this hook silent throughout because the count never left zero.
+# the hooks silent throughout because the count never left zero.
 NUDGE_PROJ="$WORK/nudgeproj"
 NUDGE_T="$WORK/nudge.jsonl"
 NUDGE_GEN="$WORK/mk_transcript.py"
@@ -343,27 +413,53 @@ with open(path, "w") as f:
 GENEOF
 
 mk_transcript() { python3 "$NUDGE_GEN" "$NUDGE_T" "$@"; }
+# The unsettled nudge carries a differently shaped mark, so its stride is
+# counted from its own text and never from the other one's.
+mark_unsettled() { python3 -c 'import json, sys
+open(sys.argv[1], "a").write(json.dumps({"type": "attachment", "attachment": {
+    "type": "hook_additional_context",
+    "content": ["qna: %s replies, 1 still open here." % sys.argv[2]]}}) + "\n")' "$NUDGE_T" "$1"; }
 NUDGE_PAYLOAD=$(printf '{"session_id":"nudged","cwd":"%s","transcript_path":"%s"}' \
   "$NUDGE_PROJ" "$NUDGE_T")
-nudge_out() { printf '%s' "$NUDGE_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1; }
+nudge_out() { printf '%s' "$NUDGE_PAYLOAD" | "$SCRIPTS/prompt-nudge.py" 2>&1; }
 
 mk_transcript 14
-hook "stays quiet before the first stride" "" stop-count.py "$NUDGE_PAYLOAD"
+hook "stays quiet before the first stride" "" prompt-nudge.py "$NUDGE_PAYLOAD"
 mk_transcript 15
-hook "nudges at the first stride" "qna: 15 replies, nothing recorded" stop-count.py "$NUDGE_PAYLOAD"
-hook "says finding nothing is an answer" "Finding none is a valid answer" stop-count.py "$NUDGE_PAYLOAD"
+hook "nudges at the first stride" "qna: 15 replies, nothing recorded" prompt-nudge.py "$NUDGE_PAYLOAD"
+hook "says finding nothing is an answer" "Finding none is a valid answer" prompt-nudge.py "$NUDGE_PAYLOAD"
 
 # A nudge-driven recording attempt was refused over --where the first time this
 # ran for real, so the nudge names what --where accepts.
-hook "nudge explains what --where takes" "wants the file:line you changed" stop-count.py "$NUDGE_PAYLOAD"
+hook "nudge explains what --where takes" "wants the file:line you changed" prompt-nudge.py "$NUDGE_PAYLOAD"
 
-# The user reads this text too, so it stays short. The first version was a
-# 150-word instruction block ending in "do not mention this check to the user",
-# written on the assumption nobody would see it; Claude Code renders Stop hook
-# output as feedback in the transcript, and the user read all of it.
-# Measured on the common form — protocol in context, so no command block. The
-# variant that spells the command out is longer by however long the paths are,
-# which is not something a length budget can govern.
+# This text is addressed to the model, and the whole reason it moved off the Stop
+# hook is that a Stop hook's output is displayed to the user. UserPromptSubmit
+# output is recorded as an attachment and never rendered.
+mk_transcript 15
+if nudge_out | grep -qF '"hookEventName": "UserPromptSubmit"'; then
+  pass "the nudge goes out on the channel the user cannot see"
+else
+  fail "the nudge goes out on the channel the user cannot see" "$(nudge_out)"
+fi
+# suppressOutput was set on the Stop path for a version and the line still
+# appeared on screen, quoted back verbatim. A flag that does nothing is worse
+# than no flag: it makes the problem look handled.
+if nudge_out | grep -qF 'suppressOutput'; then
+  fail "no suppressOutput theatre" "the flag is back, and it never worked"
+else
+  pass "no suppressOutput theatre"
+fi
+if printf '%s' "$FIRST" | grep -qF 'suppressOutput'; then
+  fail "the Stop line does not claim to be hidden either" "flag present"
+else
+  pass "the Stop line does not claim to be hidden either"
+fi
+
+# Still budgeted, for a different reason than before: nobody reads it now, but
+# every session pays for it in context every stride. Measured on the common form
+# — protocol in context, so no command block. The variant that spells the command
+# out is longer by however long the paths are, which no length budget can govern.
 mk_transcript 15
 python3 -c 'import json,sys
 open(sys.argv[1], "a").write(json.dumps({"type": "attachment", "attachment": {
@@ -372,22 +468,11 @@ open(sys.argv[1], "a").write(json.dumps({"type": "attachment", "attachment": {
 NUDGE_LEN=$(nudge_out | python3 -c \
   'import json,sys; print(len(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]))')
 if [ "$NUDGE_LEN" -lt 320 ]; then
-  pass "nudge text stays short enough to read ($NUDGE_LEN chars)"
+  pass "nudge text stays cheap ($NUDGE_LEN chars)"
 else
-  fail "nudge text stays short enough to read" "$NUDGE_LEN chars, wanted under 320"
+  fail "nudge text stays cheap" "$NUDGE_LEN chars, wanted under 320"
 fi
 mk_transcript 15
-if nudge_out | grep -qF '"suppressOutput": true'; then
-  pass "asks Claude Code not to render the nudge"
-else
-  fail "asks Claude Code not to render the nudge" "suppressOutput missing"
-fi
-if busy_out_probe=$(printf '%s' "$NUDGE_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1) &&
-   printf '%s' "$busy_out_probe" | grep -qF '"suppressOutput": true'; then
-  pass "the count asks for the same"
-else
-  fail "the count asks for the same" "suppressOutput missing"
-fi
 if nudge_out | grep -qF "do not mention this check"; then
   fail "nudge does not order the model to hide it" "still telling the model to conceal it"
 else
@@ -395,25 +480,25 @@ else
 fi
 
 # Already nudged at 15: silent until 30, then due again. Reading the last count
-# out of the visible text is what makes this work — counting nudges and
+# out of the recorded text is what makes this work — counting nudges and
 # multiplying by the stride fires a burst the moment a session starts past
 # several strides.
 mk_transcript 29 15
-hook "quiet one reply short of the next stride" "" stop-count.py "$NUDGE_PAYLOAD"
+hook "quiet one reply short of the next stride" "" prompt-nudge.py "$NUDGE_PAYLOAD"
 mk_transcript 30 15
-hook "nudges again at the next stride" "qna: 30 replies" stop-count.py "$NUDGE_PAYLOAD"
+hook "nudges again at the next stride" "qna: 30 replies" prompt-nudge.py "$NUDGE_PAYLOAD"
 
 # Mid-session install: the count arrives already past several strides. One nudge,
 # not one per stride skipped.
 mk_transcript 97
-hook "one nudge, not a catch-up burst" "qna: 97 replies" stop-count.py "$NUDGE_PAYLOAD"
+hook "one nudge, not a catch-up burst" "qna: 97 replies" prompt-nudge.py "$NUDGE_PAYLOAD"
 mk_transcript 97 97
-hook "quiet right after that nudge" "" stop-count.py "$NUDGE_PAYLOAD"
+hook "quiet right after that nudge" "" prompt-nudge.py "$NUDGE_PAYLOAD"
 
 # The command only rides along when the session never got the protocol.
 mk_transcript 15
 hook "carries the command when the protocol is absent" "qna-add --session nudged" \
-  stop-count.py "$NUDGE_PAYLOAD"
+  prompt-nudge.py "$NUDGE_PAYLOAD"
 python3 -c 'import json,sys
 open(sys.argv[1], "a").write(json.dumps({"type": "attachment", "attachment": {
     "type": "hook_additional_context",
@@ -430,29 +515,106 @@ else
   pass "nudging leaves no .qna/ behind"
 fi
 
-# A session that has recorded something takes the counting path, however long it
-# runs — the nudge is for the case where the protocol was never acted on at all.
+# Recording something used to switch the nudge off for the rest of the session.
+# A real session then parked seven items, asked about four, got four answers,
+# ran qna-resolve zero times and moved the watermark past the turns the answers
+# were given in — the whole second half of it was in the state this hook had
+# decided needed no reminding.
 RECORDED="$WORK/recorded"
 mkdir -p "$RECORDED"
 "$SCRIPTS/qna-add" --session busy --project "$RECORDED" --transcript "$TRANSCRIPT" \
-  --title "already parked" --chose "a" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null
+  --title "already parked" --chose "the default" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null
 BUSY_PAYLOAD=$(printf '{"session_id":"busy","cwd":"%s","transcript_path":"%s"}' \
   "$RECORDED" "$NUDGE_T")
-busy_out() { printf '%s' "$BUSY_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1; }
 
+mk_transcript 15
+hook "an open entry is nudged about, not left alone" "qna: 15 replies, 1 still open here" \
+  prompt-nudge.py "$BUSY_PAYLOAD"
+hook "the unsettled nudge names the cost" "an answer never written back is gone" \
+  prompt-nudge.py "$BUSY_PAYLOAD"
+hook "and that filing is not settling" "changed nothing in the code was filed" \
+  prompt-nudge.py "$BUSY_PAYLOAD"
+# Two strides counted separately: crossing from one state to the other must not
+# inherit the other's count, in either direction.
+hook "the unsettled nudge is never the unrecorded one" "" prompt-nudge.py \
+  "$(printf '{"session_id":"busy","cwd":"%s","transcript_path":"%s"}' "$RECORDED" "$WORK/none.jsonl")"
+mk_transcript 29
+mark_unsettled 15
+hook "quiet one reply short of its own stride" "" prompt-nudge.py "$BUSY_PAYLOAD"
+mk_transcript 30
+mark_unsettled 15
+hook "due again at its own stride" "qna: 30 replies, 1 still open" prompt-nudge.py "$BUSY_PAYLOAD"
+
+# Settle it and the hook goes quiet: nothing recorded is a different state from
+# recorded-and-finished, and only the first wants the protocol read back.
+mk_transcript 15
+"$SCRIPTS/qna-resolve" --session busy --project "$RECORDED" 1 \
+  --result "the default stands" --quote "park that for now" >/dev/null
+hook "silent once everything is settled" "" prompt-nudge.py "$BUSY_PAYLOAD"
+not_in_out "and never claims nothing was recorded" "nothing recorded" \
+  "$(printf '%s' "$BUSY_PAYLOAD" | "$SCRIPTS/prompt-nudge.py" 2>&1)"
+
+# An earlier session's open items count too: they are open in this project, and
+# the session that wrote them having ended does not settle anything.
+"$SCRIPTS/qna-add" --session ghost --project "$RECORDED" --transcript "$TRANSCRIPT" \
+  --title "left behind by a dead session" --chose "nothing" --alt "b" --alt "c" \
+  --why "w" --where "$SAID" >/dev/null
+hook "an earlier session's open items still nudge" "1 still open here" \
+  prompt-nudge.py "$BUSY_PAYLOAD"
+
+# Its own project, so the ids the Stop line prints are not whatever the nudge
+# tests above happened to leave behind.
+SEEN="$WORK/seen"
+mkdir -p "$SEEN"
+"$SCRIPTS/qna-add" --session seen --project "$SEEN" --transcript "$TRANSCRIPT" \
+  --title "already parked" --chose "the default" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null
+BUSY_OUT=$(stop_ctx "$(printf '{"session_id":"seen","cwd":"%s"}' "$SEEN")")
 # Self-contained: naming the item is what makes the line mean anything. "qna: 1
 # parked" told the user nothing — in their words, "no idea what this means".
-hook "the count names the item" "already parked" stop-count.py "$BUSY_PAYLOAD"
-if busy_out | grep -qF "Surface this"; then
-  fail "the count is not echoed back by the model" "still asking the model to repeat it"
-else
-  pass "the count is not echoed back by the model"
-fi
-if busy_out | grep -qF "nothing recorded"; then
-  fail "a session with entries is never nudged" "got the nudge as well as the count"
-else
-  pass "a session with entries is never nudged"
-fi
+in_out "the Stop line names the item" "qna parked #1 — already parked" "$BUSY_OUT"
+in_out "and what was done about it" "going with: the default" "$BUSY_OUT"
+not_in_out "the Stop line is never a nudge" "nothing recorded" "$BUSY_OUT"
+
+# ------------------------------------------- carried over from other sessions
+printf '=== carried over from an earlier session\n'
+# Entries are filed per session because a session is the unit of context, not
+# because a decision expires with it. Measured: a project ended a session with
+# seven items open and the next session in that directory could see none of
+# them — no hook read them, no command listed them, and the 30-day orphan sweep
+# was the only thing that would ever touch them again.
+CARRY="$WORK/carry"
+mkdir -p "$CARRY"
+carry_add() { # <session> <title>
+  "$SCRIPTS/qna-add" --session "$1" --project "$CARRY" --transcript "$TRANSCRIPT" \
+    --title "$2" --chose "nothing yet" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null
+}
+carry_add gone-session "left behind when that session ended"
+carry_add gone-session "settled before it ended"
+"$SCRIPTS/qna-resolve" --session gone-session --project "$CARRY" 2 \
+  --result "done" --quote "park that for now" >/dev/null
+carry_add live-session "parked in this session"
+
+CARRY_OUT=$(printf '{"session_id":"live-session","cwd":"%s","transcript_path":"%s","source":"startup"}' \
+  "$CARRY" "$TRANSCRIPT" | "$SCRIPTS/session-start.py" 2>&1 | python3 -c 'import json, sys
+print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"], end="")')
+
+in_out "surfaces an earlier session's open item" "left behind when that session ended" "$CARRY_OUT"
+in_out "counts them separately from this session's" "Still open here from an earlier session (1)" "$CARRY_OUT"
+in_out "still lists this session's own" "Currently parked (1)" "$CARRY_OUT"
+not_in_out "does not resurrect what that session settled" "settled before it ended" "$CARRY_OUT"
+# Ids belong to the file they were written in, so the way to close one is that
+# session's own command line — not this session's with a foreign number.
+in_out "gives that session's own resolve line" \
+  "qna-resolve --session gone-session --project $CARRY" "$CARRY_OUT"
+in_out "and the path to read them in full" "$CARRY/.qna/gone-session.md" "$CARRY_OUT"
+in_out "warns against re-parking them here" "open in two files" "$CARRY_OUT"
+
+# A dead session with a long backlog must not push the protocol out of the way.
+for i in 1 2 3 4 5 6 7 8 9 10; do carry_add gone-session "backlog item $i"; done
+CARRY_MANY=$(printf '{"session_id":"live-session","cwd":"%s","transcript_path":"%s","source":"startup"}' \
+  "$CARRY" "$TRANSCRIPT" | "$SCRIPTS/session-start.py" 2>&1 | python3 -c 'import json, sys
+print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"], end="")')
+in_out "caps the listing and says how many it held back" "and 3 more" "$CARRY_MANY"
 
 # ------------------------------------------------------------- orphan sweeping
 printf '=== orphan sweep\n'

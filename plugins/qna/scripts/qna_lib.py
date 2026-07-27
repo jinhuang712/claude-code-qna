@@ -134,6 +134,34 @@ def open_entries(path):
     return [e for e in read_entries(path) if not e["done"]]
 
 
+def other_session_entries(session, project=None):
+    """Open entries parked in this project by other sessions, oldest file first.
+
+    Entries are stored per session because a session is the unit of context, not
+    because a decision stops mattering when the session ends. Those two came
+    apart in practice: seven items were parked in a project, the session ended
+    with all seven open, and the next session in the same directory could not see
+    one of them — no hook read them, no command listed them, and the orphan sweep
+    was the only thing that would ever touch them again.
+
+    So the read side is per project and the write side stays per session. Ids are
+    only unique within a file, which is why callers surface these separately
+    rather than merging them into one numbered list: settling one means running
+    qna-resolve with that file's own session id.
+    """
+    d = os.path.join(project_dir(project), ".qna")
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for name in sorted(os.listdir(d)):
+        if not name.endswith(".md") or name[:-3] == session:
+            continue
+        entries = open_entries(os.path.join(d, name))
+        if entries:
+            out.append((name[:-3], entries))
+    return out
+
+
 def next_id(path):
     entries = read_entries(path)
     return max((e["id"] for e in entries), default=0) + 1
@@ -263,22 +291,32 @@ def hook_input():
         return {}
 
 
-def emit(event, context, suppress=False):
+def emit(event, context):
     """Emit additionalContext for a hook that supports it.
 
-    suppress asks Claude Code not to render the output in the transcript. It
-    matters because a Stop hook's additionalContext turns out to be shown to the
-    user as "Stop hook feedback" — the reminders here are written for the model,
-    and one of them was read by a user who reasonably found it baffling. The flag
-    is set alongside text short enough to survive being displayed anyway, since
-    whether it is honoured for this path is not something we can prove from here.
+    Whether the text also reaches the user's screen depends entirely on which
+    event it is emitted for, and the difference is visible in the transcript:
+
+        SessionStart, UserPromptSubmit   an attachment, type
+                                         "hook_additional_context" — model only
+        Stop                             a "stop_hook_summary" entry, which
+                                         Claude Code renders as "Stop hook
+                                         feedback" under the reply
+
+    suppressOutput does not change that. It was set on the Stop path for exactly
+    this purpose and the line still appeared on screen, quoted back verbatim by
+    the user, so the flag is gone rather than left in place looking like it does
+    something. The rule that replaces it is a placement rule: anything written
+    for the model goes out on UserPromptSubmit, and the Stop path carries only
+    text worth a person's attention.
     """
-    payload = {
-        "hookSpecificOutput": {
-            "hookEventName": event,
-            "additionalContext": context,
-        }
-    }
-    if suppress:
-        payload["suppressOutput"] = True
-    print(json.dumps(payload))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": context,
+                }
+            }
+        )
+    )

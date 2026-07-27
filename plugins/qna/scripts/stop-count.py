@@ -1,152 +1,71 @@
 #!/usr/bin/env python3
-"""Stop hook: report the backlog, or re-surface the protocol if there is none.
+"""Stop hook: tell the user what was just decided for them.
 
-Two jobs, and a session is only ever in one of them.
+This is the one hook whose output reaches a person. Claude Code records a Stop
+hook's additionalContext as a "stop_hook_summary" and renders it under the reply
+as "Stop hook feedback"; SessionStart and UserPromptSubmit land as attachments
+and are never displayed. suppressOutput does not change that — it was set here
+for a whole version and the line still appeared on screen. So the split is by
+placement, not by flag: everything addressed to the model went to
+prompt-nudge.py, and what is left here is written for the reader.
 
-**Something has been recorded** — report when the count changes, and only then.
-Repeating "2 parked" at the end of every reply for as long as the backlog sits
-there is noise, and noise is what makes a reminder stop registering. A change
-means something actually happened: one was parked, or one was settled.
+Three things follow from that.
 
-**Nothing has been recorded** — re-surface the protocol every 15 replies, at a
-fixed cadence for as long as the session runs. Milestones that thin out (15,
-then 45, then 90) were rejected: a decision made at reply 200 is no less worth
-recording than one made at reply 15, and a reminder that fades leaves the long
-tail of a long session uncovered. The earlier design nudged every single turn
-and was cut for costing a per-turn reminder to buy very little. What that traded
-away is now measured: a real 54-minute session with 84 conversation turns and 49
-questions asked recorded zero entries, and this hook never said a word, because
-the count never changed from zero. The protocol was injected at turn zero and
-never mentioned again. "Very little" was being compared against nothing at all.
+**It fires on a new entry, not on a count.** The old version compared the number
+of open items against the last number reported, which meant resolving one
+printed a line about a different item that had been sitting there for an hour —
+news about nothing. What is worth interrupting for is the moment a choice gets
+made on the user's behalf, so the trigger is an id above the highest already
+reported. Settling something prints nothing: the user just did it.
 
-The nudge does not move the judgement out of the model — that self-interruption
-is the design, not a workaround for it. It only puts the protocol back within
-reach and says plainly that finding nothing is a valid outcome.
+**It says what was chosen, not just what is open.** The title alone is a
+question with no answer in sight — "要不要用 disable-model-invocation" tells the
+reader they have something to think about and nothing to think with. Carrying
+--chose alongside it means the common case needs no follow-up at all: they read
+what was picked, shrug, and it is settled by silence. /qna:ask is for when they
+would rather it had gone the other way.
 
-**A Stop hook's additionalContext is shown to the user.** Claude Code renders it
-as "Stop hook feedback" in the transcript, so everything here is read by a person
-as well as by the model. This was got wrong once: the first version was a 150-word
-instruction block ending in "do not mention this check to the user", written on
-the assumption that nobody would see it. The user saw all of it, including a raw
-absolute path, and said so. Two consequences hold now:
-
-  * Every line is written to read sensibly to a person. Short, plain, no
-    templates, no instruction voice where a statement will do.
-  * Nothing asks the model to repeat a line back. The hook's own output *is* the
-    surfacing. Telling the model to echo it produced the message twice, which is
-    what made it read as abrupt.
-
-Note the one-turn lag: additionalContext reaches the model on its *next* call, so
-anything the model does in response lands a reply later.
+**Nothing here asks the model for anything.** An earlier version ended in
+"Surface this as a single short line at the end of your next reply" — the model
+obeyed, the line was printed twice, and the instruction outlived the version that
+sent it because it sits in that session's context forever. The standing rule
+against repeating this line now lives in the SessionStart protocol, on the
+channel the user cannot see.
 """
 
 import os
-import re
-import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import qna_lib  # noqa: E402
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-
-# How often to re-surface the recording protocol in a session that has recorded
-# nothing. A fixed stride, not a series that thins out: a choice made at reply
-# 200 is no less worth recording than one made at reply 15.
-NUDGE_EVERY = 15
-
-# Nudges are counted out of the transcript rather than a state file. A Stop hook
-# has nowhere to write that would not put a .qna/ into every project a session
-# was ever opened in, which is the bug that made this hook silent to begin with.
-# additionalContext lands in the transcript as a hook_additional_context entry,
-# so the record of having nudged is already on disk — no second copy needed.
-#
-# The reply count at the time of each nudge is carried in the visible text and
-# read back out of it. Counting nudges and multiplying by the stride is not
-# equivalent: a session that installs the plugin mid-way arrives with the count
-# already past several strides, and "have I sent as many as the count implies"
-# then fires a burst of catch-up nudges in consecutive turns. What matters is how
-# long it has been since the last one.
-CONTEXT_LINE = "hook_additional_context"
-NUDGE_MARK = re.compile(r"qna: (\d+) replies, nothing recorded")
-
-# A transcript this large means something pathological; skip rather than read it
-# at the end of every turn.
-MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
-
-# The protocol, if it was ever injected. Its absence means a mid-session install:
-# the model has never seen the recording command, so the nudge has to carry it.
-PROTOCOL_MARK = "Open-decision log"
+# Terminal output under an already-wrapped reply. Long enough to identify the
+# entry, short enough not to become a paragraph.
+MAX_TITLE = 70
+MAX_CHOSE = 70
 
 
-def transcript_state(path):
-    """Assistant replies so far, replies at the last nudge, protocol seen.
+def clip(text, limit):
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
-    The reply count goes through qna_lib.iter_turns because that is the one place
-    allowed to know the transcript's shape. An earlier version matched
-    '"type":"assistant"' as a substring and silently counted zero the moment the
-    separator had a space in it — the exact brittleness that rule exists for.
 
-    The other two cannot use iter_turns: hook output arrives as an attachment
-    entry, which iter_turns drops. Substring matching is safe there because both
-    marks are our own literals, and both are plain ASCII — a transcript escapes
-    non-ASCII into backslash-u sequences, which would break the match silently.
+def first_run_baseline(meta, entries):
+    """Highest id to treat as already announced on a meta written before this.
+
+    Three states, and they are not the same:
+
+      reported_max_id present   this version has run here; use it
+      only reported_count       an older version reported these already, so
+                                start from the top and announce nothing old
+      neither                   nothing has ever been reported here, including
+                                the first entry, which is the one most worth
+                                saying out loud
     """
-    if os.path.getsize(path) > MAX_TRANSCRIPT_BYTES:
-        return 0, 0, True  # too big to read: turns stay 0, so nothing fires
-
-    last_nudge = 0
-    protocol = False
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            if CONTEXT_LINE not in line:
-                continue
-            if PROTOCOL_MARK in line:
-                protocol = True
-            m = NUDGE_MARK.search(line)
-            if m:
-                last_nudge = max(last_nudge, int(m.group(1)))
-
-    turns = sum(1 for t in qna_lib.iter_turns(path) if t["role"] == "assistant")
-    return turns, last_nudge, protocol
-
-
-def nudge(session, project, transcript):
-    """Re-surface the recording protocol, NUDGE_EVERY replies since the last."""
-    if not transcript or not os.path.exists(transcript):
-        return 0
-    try:
-        turns, last, protocol = transcript_state(transcript)
-    except OSError:
-        return 0
-    if turns - last < NUDGE_EVERY:
-        return 0
-
-    # One line. The three bars collapse into the one that does the work — reversal
-    # cost is what separates a decision from an implementation detail — and the
-    # --where hint rides along because the first nudge that did produce a
-    # recording attempt lost it to a paraphrased citation.
-    text = (
-        f"qna: {turns} replies, nothing recorded. If you made a call on the "
-        f"user's behalf that would cost real work to reverse, record it with "
-        f"QNA_ADD (--where wants the file:line you changed, or their words "
-        f"verbatim — not a paraphrase). Finding none is a valid answer."
-    )
-    if not protocol:
-        add = "{} --session {} --project {}".format(
-            shlex.quote(os.path.join(HERE, "qna-add")),
-            shlex.quote(session),
-            shlex.quote(project),
-        )
-        if transcript:
-            add += " --transcript {}".format(shlex.quote(transcript))
-        text += (
-            f"\n\nThis session never received the qna block, so the command is:\n"
-            f"  {add} --title <one line> --chose <what you did> "
-            f"--alt <one> --alt <another> --why <the tradeoff> "
-            f"--where <file:line or words actually said>"
-        )
-    qna_lib.emit("Stop", text, suppress=True)
+    if "reported_max_id" in meta:
+        return meta["reported_max_id"]
+    if "reported_count" in meta:
+        return max((e["id"] for e in entries), default=0)
     return 0
 
 
@@ -157,50 +76,51 @@ def main():
         return 0
 
     project = qna_lib.find_session_dir(data.get("cwd"), session)
-    transcript = data.get("transcript_path")
 
-    # Two different jobs, and which one applies is decided by whether this
-    # session has ever recorded anything. Neither writes to disk in the
-    # nothing-recorded case: a hook that leaves a trace in every project a
-    # session was opened in is the bug that made this one silent.
+    # Only projects that have recorded something have anything to report, and
+    # asking for the path would create the directory in every project a session
+    # was ever opened in.
     if not qna_lib.qna_dir_exists(project):
-        return nudge(session, project, transcript)
+        return 0
 
     path = qna_lib.pending_path(session, project, create=False)
     if not os.path.exists(path):
-        return nudge(session, project, transcript)
+        return 0
 
-    entries = qna_lib.open_entries(path)
-    count = len(entries)
-    if count == 0 and not qna_lib.read_entries(path):
-        return nudge(session, project, transcript)
+    entries = qna_lib.read_entries(path)
+    if not entries:
+        return 0
 
     meta = qna_lib.load_meta(session, project)
-    if count == meta.get("reported_count"):
+    baseline = first_run_baseline(meta, entries)
+    top = max(e["id"] for e in entries)
+    if top <= baseline:
         return 0
-    meta["reported_count"] = count
+
+    # Advance past everything in the file, including anything added and settled
+    # inside the same turn — that one never needed announcing and must not be
+    # announced late.
+    meta["reported_max_id"] = top
+    meta.pop("reported_count", None)
     try:
         qna_lib.save_meta(session, meta, project)
     except OSError:
         pass  # Worst case the same line repeats once. Not worth failing over.
 
-    if count == 0:
+    fresh = [e for e in entries if e["id"] > baseline and not e["done"]]
+    if not fresh:
         return 0
 
-    # Named, not counted. "qna: 1 parked" was reported as meaningless — "no idea
-    # what this means" — because nothing in it says what was parked or what to do.
-    # And no instruction to echo it: this text is on the user's screen already, so
-    # asking the model to repeat it printed the same message twice.
-    newest = max(entries, key=lambda e: e["id"])["title"]
-    if len(newest) > 60:
-        newest = newest[:57] + "..."
-    if count == 1:
-        body = f'1 decision recorded here and still open — "{newest}". ' \
-               "/qna:ask turns it into a clickable question."
-    else:
-        body = f'{count} decisions recorded here and still open, newest ' \
-               f'"{newest}". /qna:ask turns them into clickable questions.'
-    qna_lib.emit("Stop", f"qna: {body} No need to relay this line.", suppress=True)
+    lines = []
+    for e in fresh:
+        lines.append(f"qna parked #{e['id']} — {clip(e['title'], MAX_TITLE)}")
+        chose = e["fields"].get("Chose", "").strip()
+        if chose:
+            lines.append(f"    going with: {clip(chose, MAX_CHOSE)}")
+    still_open = len([e for e in entries if not e["done"]])
+    lines.append(f"    /qna:ask to settle · {still_open} open")
+
+    qna_lib.emit("Stop", "\n".join(lines))
     return 0
 
 

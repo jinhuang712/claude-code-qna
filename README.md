@@ -151,22 +151,27 @@ bash reinstall.sh --local      # force working tree
                         |               +--- no preview         -> denied
                         |               +--- payload unparsed   -> denied
                         v
-                  decision list --> stop
+                  decision list --> write the answers back
+                        |            then do what they decided
                         |
                         +-> new opens from R6 --> qna-add
                         |
               qna-scan --mark                next scan starts here
 
-  ============  at the end of a turn  ============
-       Stop hook --> count changed?  ->  names the newest open item
-                     unchanged       ->  silence
-                     nothing ever
-                     recorded?       ->  re-surface the protocol,
-                                         every 15 replies
+  ============  around each turn  ============
+       your prompt --> nothing ever recorded?  -> re-surface the protocol,
+                       (UserPromptSubmit)         every 15 replies
+                                                  never displayed to you
 
-       Both lines reach you, not just Claude. They ask to be hidden
-       (suppressOutput), and are written short in case that is not
-       honoured — and neither asks Claude to repeat them back.
+       end of turn --> something new parked?   -> names it, and what
+                       (Stop hook)                Claude went with
+                       nothing new             -> silence, including
+                                                  when you settle one
+
+       Only the Stop hook reaches your screen — Claude Code renders it
+       under the reply and suppressOutput does not stop it. So that is
+       the one place anything is written for you to read, and everything
+       addressed to Claude goes out on the channel you never see.
 ```
 
 ### Enforce in code what code can enforce
@@ -258,10 +263,18 @@ that point survives only as a summary.
 - **Not claiming completeness.** Nothing can force a model to notice it is making
   a decision, so coverage is partial by design. The output never says "that's
   all" — when the queue empties it says nothing else surfaced in this scan.
-- **Not acting on the answers.** It prints the decisions and stops.
+- **Not asking twice.** The answers are written back with `qna-resolve` and then
+  carried out in the same turn. It used to print the decisions and stop, which
+  turned an hour of answering into a table: one real run parked seven items,
+  asked about four, wrote back none, and advanced the watermark past the turns
+  the answers were given in.
 - **Not a substitute for asking now.** Anything destructive, irreversible, or
   where a wrong guess wastes the work still gets raised immediately.
-- **Not crossing sessions.** State is per session; `/clear` starts fresh.
+- **Not carrying context across sessions** — but open decisions do carry. Files
+  are per session, because a session is the unit of context. A question nobody
+  has ruled on is not context, so a new session in the same directory is shown
+  what earlier ones left open, with the command to settle each. Without that,
+  seven items in one project were reachable by nothing but the 30-day sweep.
 - **Not a team artifact.** `.qna/` carries its own `.gitignore` containing `*`,
   so it never reaches version control and your project's `.gitignore` is left
   alone.
@@ -275,7 +288,7 @@ that point survives only as a summary.
 ```
 <project>/.qna/.gitignore      a single "*" — the directory hides itself
 <project>/.qna/<session>.md    parked decisions
-<project>/.qna/<session>.meta  transcript path, last count reported, scan watermark
+<project>/.qna/<session>.meta  transcript path, last entry announced, scan watermark
 ```
 
 The directory appears only when something is actually recorded. The hooks run in
