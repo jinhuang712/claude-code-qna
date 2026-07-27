@@ -1,6 +1,6 @@
 {
   "name": "qna-marketplace",
-  "description": "qna — turns open decisions into clickable questions.",
+  "description": "qna — the decisions still waiting on you.",
   "owner": {
     "name": "jinhuang712",
     "url": "https://github.com/jinhuang712"
@@ -9,7 +9,7 @@
     {
       "name": "qna",
       "source": "./plugins/qna",
-      "description": "Turns open decisions into clickable questions."
+      "description": "The decisions still waiting on you."
     }
   ]
 }

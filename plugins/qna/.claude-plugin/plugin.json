@@ -1,8 +1,8 @@
 {
   "name": "qna",
   "displayName": "qna",
-  "version": "0.12.1",
-  "description": "Turns open decisions into clickable questions.",
+  "version": "0.12.2",
+  "description": "The decisions still waiting on you.",
   "author": {
     "name": "jinhuang712"
   },
