@@ -1,6 +1,10 @@
 # /qna · v1 定稿（含全部修订）
 
-审查状态：逐节待审。标 `[待审]` 的是我拍的、需要你确认或推翻的。
+状态：v1 已定稿并实装，无待审项。最后一次与实装对账 2026-07-27 11:08:02（北京时间，下同）。
+
+实装期间发现三处设计漏洞，均已回填本文档：`.qna/` 落盘位置由模型计算（§九「一切走脚本」）、注入命令行里的 `|` 会被当成管道、注入文本里的 `$QNA_*` 在模型的 shell 里是空的（§五）。三者同一家族——**凡让模型自己算的落点，算错都不报错**。
+
+代码侧的机械保证由 `tests/smoke.sh` 逐条断言（47 条）；prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
 
 ---
 
@@ -182,8 +186,11 @@ argument-hint: [可选：只清理某个话题，如「架构」]
 
 ### 我们提供的脚本
 
+四个脚本，**都不许模型自己拼路径**——`--session` 与 `--project` 由 `SessionStart` 注入在命令行里（理由见 §九「一切走脚本」）。
+
 ```
-qna-add   --title <一行>  --chose <你选了什么>
+qna-add   --session <id> --project <abs>     ← 注入，模型照抄
+          --title <一行>  --chose <你选了什么>
           --alt <备选> --alt <备选> [--alt <更多>]
           --why <是什么取舍让你这么选>
           --where <file:line 或 一句原话>
@@ -200,12 +207,21 @@ qna-add   --title <一行>  --chose <你选了什么>
     通过                 分配递增 id 后追加，回 "Recorded #4."
 
 
-qna-resolve <id>  --result <定成了什么>  --quote <用户原话>
+qna-resolve <id>  --session <id> --project <abs>
+                  --result <定成了什么>  --quote <用户原话>
 
     --quote 缺失         Refused: no quote. If you cannot quote the user,
                          it is not settled — leave it in the queue.
     id 不存在            拒绝并列出当前所有 id
-    通过                 标 [x] 并追加 Result 行，回 "Resolved #4."
+    已归档过             拒绝
+    通过                 标 [x] 并追加 Result / Quote 行，回 "Resolved #4."
+
+
+qna-mark    --session <id> --project <abs>  --on | --off | --status
+
+    --on      建 .qna/<sid>.active（顺带 mkdir -p），开启 PreToolUse 校验器
+    --off     删标记，幂等（异常中断后再调不报错）
+    --status  报当前开关状态
 ```
 
 **`--alt` 下限是 2 不是 1。** 条目映射为 `Chose` → 第一个选项、`Alternatives` → 其余选项，下限 1 只能产出 2 个选项，直接违反 D12「每题至少 3 个」。下限 2 才保得住。
@@ -280,7 +296,11 @@ PreToolUse   matcher: AskUserQuestion
 
 `deny` 的 `permissionDecisionReason` 直接回给模型，和 `qna-add` 的拒绝文案同一套路数：**拒绝本身就是答案**。
 
-**作用域靠标记文件**：`/qna:ask` 开始时写 `$CLAUDE_PROJECT_DIR/.qna/<session_id>.active`，结束时删。hook 只在标记有效时校验，其余场合一律放行——qna 的规矩不外溢到日常对话。
+**作用域靠标记文件**：`/qna:ask` 开头跑 `$QNA_MARK --on`，收尾跑 `--off`。hook 只在标记有效时校验，其余场合一律放行——qna 的规矩不外溢到日常对话。
+
+**标记的位置必须由脚本算，不能由模型拼。** 让模型拼会开出一个静默失效的口子：写标记的是模型跑的 shell（那里**没有** `CLAUDE_PROJECT_DIR`，路径必然回落到当次工作目录），读标记的是 hook（用自己 payload 里的 `cwd`）。两边各自理解「当前目录」，会话起在子目录或中途 `cd` 就错位——而**找不到标记 = 判定 `/qna:ask` 没在跑 = 全部放行**，R2/R4 那道硬闸整程失效且毫无提示。故：写侧路径由 `SessionStart` 注入进 `$QNA_MARK`，读侧 hook 用 `find_session_dir` 按 session id 逐级向上定位（文件名带 session id，命中即证明是对的目录，撞不到别人的 `.qna/`）。
+
+另一半同源：`touch` 不建父目录，`.qna/` 尚不存在时直接失败。`qna-mark --on` 走 `qna_dir(create=True)`，顺带建目录。
 
 **标记自过期**：文件内含时间戳，hook 见到超过 30 分钟的直接当作不存在并顺手删除。`/qna:ask` 异常中断留下的残标记会自愈，不需要别处做清理。
 
@@ -299,18 +319,24 @@ PreToolUse   matcher: AskUserQuestion
 ```markdown
 <!-- qna-pending · written by qna-add / qna-resolve · cleared by /qna:ask -->
 
-- [ ] #4 · 19:02 · 缓存后端选型
+- [ ] #4 · 2026-07-27T19:02 · 缓存后端选型
   - Chose: SQLite
   - Alternatives: 纯文件目录 / Redis / 内存 LRU
   - Why: 要跨进程共享又不想引外部依赖
   - Where: src/cache/backend.py:1
+  - Source: agent
+  - Verified: yes
 
-- [ ] #5 · 19:33 · 要不要支持自定义缓存目录 (deferred-by-user)
+- [ ] #5 · 2026-07-27T19:33 · 要不要支持自定义缓存目录
   - Chose: 暂不支持，写死 XDG 路径
   - Alternatives: 读环境变量 / 加 --cache-dir 参数
   - Why: 你说先记着回头再说
-  - Where: src/cache/paths.py:5
+  - Where: 这个先记着，回头再说
+  - Source: user-deferred
+  - Verified: yes
 ```
+
+**`Source` 与 `Verified` 两个字段是实装追加的。** `Source: user-deferred` 取代了原设计写在标题后的 `(deferred-by-user)` 后缀——聚合规则要机械地读它（`--deferred-by-user` 的条目不得降级），字段比标题里的括号可靠。`Verified: unverified` 标记 transcript 读不了时放行的那一类。
 
 **`id` 是必须的**——`qna-resolve <id>` 靠它定位，`SessionStart` 清单段也要带它，否则模型知道有条目却无法引用。由 `qna-add` 分配递增序号，session 内唯一。
 
@@ -323,8 +349,11 @@ PreToolUse   matcher: AskUserQuestion
 ```
   SessionStart hook   (startup | resume | clear | compact)
        |
+       +--> 定锚 find_session_dir(cwd, sid)  已有文件在哪就用哪
        +--> 写 .qna/<session_id>.meta   存 transcript_path
        +--> 注入 三条记录协议 + 当前悬置清单(带 id)
+       +--> 注入 四条命令，每条都带绝对 --project
+            QNA_ADD / QNA_RESOLVE / QNA_MARK / QNA_FILE
        |
        v
   ==================  主会话干活中  ==================
@@ -350,7 +379,7 @@ PreToolUse   matcher: AskUserQuestion
                                           |
   ==============  你敲 /qna:ask  ==========|=====================
                                           |
-       写 .qna/<session_id>.active        |     标记有效期 30 分钟
+       $QNA_MARK --on                     |     标记有效期 30 分钟
               |                           |
               |        读文件 <-----------+
               |           |
@@ -384,12 +413,13 @@ PreToolUse   matcher: AskUserQuestion
               |           v
               |      决策清单 --> 停
               v
-       删 .qna/<session_id>.active
+       $QNA_MARK --off
 
   ══════════  每轮 turn 结束  ══════════
-       Stop hook --> 数未勾选条目
-                     N > 0 -> “qna: N parked” 跟在下一轮回复末尾
-                     N = 0 -> 不输出
+       Stop hook --> 数未勾选条目，与 .meta 里 reported_count 比
+                     变了   -> “qna: N parked” 跟在下一轮回复末尾
+                     没变   -> 不输出
+                     N = 0  -> 不输出（只更新 reported_count）
 ```
 
 图上两处容易看漏：
@@ -401,10 +431,13 @@ PreToolUse   matcher: AskUserQuestion
 
 ```
   代码保证 |  记录侧  文件路径 · 时间戳 · session 隔离 · 必填字段
-  (qna-add |          落点可验证（代码存在 或 原话确实说过）
+  (脚本    |          落点可验证（代码存在 或 原话确实说过）
    + hook) |          alt 数量下限 · 归档必须带 quote
            |  提问侧  选项数 >= 3 且 <= 4 · preview 必须存在
            |          （PreToolUse 校验器，作用域限于 qna 流程内）
+           |  落盘位置  锚点由 SessionStart 定、注入进每条命令
+           |            读侧 hook 按 session id 向上定位
+           |            （模型不参与任何路径计算）
   ---------+-----------------------------------------------------
   prompt   |  这算不算一个决策点          <- 只剩这两处
   保证     |  对账判断是否已解决
@@ -412,13 +445,17 @@ PreToolUse   matcher: AskUserQuestion
 
 两侧保证强度现在对等：记录侧编不出 `--alt` 过不去，提问侧给两个选项也过不去。
 
+**「落盘位置」这一行的门槛与前两行不同：前两行拦的是错的内容，它拦的是错的地点。** 字段与数量算错会当场被拒；文件落错地方不报错——标记落到别处，校验器就判定 `/qna:ask` 没在跑，整程放行。**一条静默失效的路径，比十条会报错的更贵。** 所以凡是模型要算的东西，都先问一句：算错了会不会有人喊。没人喊的，交给脚本。
+
 ### v1 范围
 
-装：`/qna:ask` · `qna-add` · `qna-resolve` · `qna-transcript` · `SessionStart` hook · `PreToolUse` 校验器
+装：`/qna:ask` · `qna-add` · `qna-resolve` · `qna-transcript` · `qna-mark` · `SessionStart` hook · `PreToolUse` 校验器 · `Stop` hook（仅增量提醒）· `tests/smoke.sh`
 
-不装：`Stop` hook（回溯性催促，性价比最低）· transcript 的 compact 恢复 · 相似度去重 · 12 条上限 · 积压提醒 `[待审]` · 孤儿清理以外的维护逻辑
+不装：transcript 的 compact 恢复 · 相似度去重 · 12 条上限 · 孤儿清理以外的维护逻辑
 
-`[待审]` 积压提醒（条数跨 5 的倍数时提一句）原本由 `stop-nudge.sh` 投递，`Stop` 移出 v1 后它没有载体了。三选一：挂到 `SessionStart`（开会话时报一次积压）/ 一并推到 v2 / 直接删。
+**`Stop` hook 已收进 v1，但只保留「数条目」这一半。** 原本判它性价比最低，针对的是"回溯性催促模型自查这一轮有没有漏记决策"——那种自查很弱。数文件里的未勾选条目不需要任何判断，成本近零，于是留下。
+
+原 `[待审]` 积压提醒（条数跨 5 的倍数时提一句）落定为：**条数变化时报一次**。`.meta` 存 `reported_count`，与当前条数不等才出声。跨 5 的倍数是拍脑袋的阈值，而"每轮都报"会让提醒变成背景噪音——变化才是真有事发生（记进一条，或归档一条）。
 
 ---
 
@@ -545,6 +582,16 @@ R1 / R2 / R4 由 `PreToolUse` 机械保证，R3 / R5 / R6 / R7 靠 prompt。**R7
 
 **场景**：你让我给 `arkcli` 加响应缓存，我干了 40 分钟你没打断。
 
+**本节命令一律省掉注入前缀。** 实际形态是 `SessionStart` 注入的完整命令行，模型整行照抄：
+
+```
+/Users/…/plugins/cache/qna-marketplace/qna/0.2.0/scripts/qna-add \
+    --session 8026af30 --project /Users/…/arkcli \
+    --title "缓存后端选型" …
+```
+
+下面为可读性只写 `qna-add --title …`，省掉的正是这两个注入参数。
+
 ### 干活期间 · 记录
 
 代码落点，`--where` 指向真实文件：
@@ -598,11 +645,11 @@ Resolved #3.
 
 ### 触发过一次 compact
 
-`SessionStart` 以 `compact` matcher 重跑，`session_id` 不变 → 协议与悬置清单（带 id）重新注入，`.meta` 里的 `transcript_path` 也刷新。压缩前记的一条没丢。
+`SessionStart` 以 `compact` matcher 重跑，`session_id` 不变 → 协议、四条注入命令、悬置清单（带 id）重新注入，`.meta` 里的 `transcript_path` 也刷新。压缩前记的一条没丢。锚点由 `find_session_dir` 重新定位到既有文件所在目录，即使这期间工作目录变过也不会分叉出第二个 `.qna/`。
 
 ### 你敲 `/qna:ask`
 
-写 `.qna/<sid>.active`，`PreToolUse` 校验器随即生效。扫对话 + 读文件 → 合并去重 → 对账 → 分级 → 聚合 → 总览：
+跑 `qna-mark --on`，`PreToolUse` 校验器随即生效。扫对话 + 读文件 → 合并去重 → 对账 → 分级 → 聚合 → 总览：
 
 ```
 扫到 11 条，对账后剩 7 条要问。
@@ -705,7 +752,7 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 
 最后那行**不是「无」**——G6.3 的措辞禁令。工具召回率只有四到六成，不能假装清干净了。
 
-然后**停住**。不追问，不动代码。删 `.active` 标记，`PreToolUse` 校验器随之失效。文件里 11 条清空 9 条，剩 2 条（`#6` 失效已删、留下的是你没拍的那些）。
+然后**停住**。不追问，不动代码。跑 `qna-mark --off`，`PreToolUse` 校验器随之失效。文件里 11 条清空 9 条，剩 2 条（`#6` 失效已删、留下的是你没拍的那些）。
 
 全程没让你打过一个字。
 
@@ -727,15 +774,23 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 │   ├── hooks/
 │   │   └── hooks.json          SessionStart + Stop + PreToolUse
 │   └── scripts/
-│       ├── session-start.sh    注入协议+清单 · 写 .meta · 清孤儿
-│       ├── stop-count.sh       每轮报积压条数
-│       ├── pre-tool-use.sh     校验 AskUserQuestion 入参
+│       ├── qna_lib.py          共用：存储布局 · 锚点解析 · 条目解析
+│       ├── session-start.py    定锚 · 注入协议+命令+清单 · 写 .meta · 清孤儿
+│       ├── stop-count.py       积压条数变化时报一次
+│       ├── pre-tool-use.py     校验 AskUserQuestion 入参
 │       ├── qna-add
 │       ├── qna-resolve
-│       └── qna-transcript
-├── docs/superpowers/specs/
+│       ├── qna-transcript
+│       └── qna-mark            开关 PreToolUse 校验器
+├── specs/
+│   └── design.md               本文档
+├── tests/
+│   └── smoke.sh                47 条断言，无依赖
+├── reinstall.sh                卸载·清缓存·重装·校验（curl 一条即可装）
 └── README.md
 ```
+
+**脚本是 Python 不是 shell。** 要解析 jsonl、读写 json、按格式往回写条目——这些用 shell 写出来的东西没人愿意改。hook 的三个入口也一并用 `.py`，免得同一套逻辑分两种语言。运行时只依赖 `python3`，插件本身零第三方依赖。
 
 ### hooks.json
 
@@ -745,16 +800,16 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
     "SessionStart": [
       { "matcher": "startup|resume|clear|compact",
         "hooks": [{ "type": "command",
-                    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-start.sh" }] }
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-start.py" }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command",
-                    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/stop-count.sh" }] }
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/stop-count.py" }] }
     ],
     "PreToolUse": [
       { "matcher": "AskUserQuestion",
         "hooks": [{ "type": "command",
-                    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/pre-tool-use.sh" }] }
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/pre-tool-use.py" }] }
     ]
   }
 }
@@ -773,36 +828,84 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 - 协议文本里**不能**写死路径
 - 也**不该**往 `~/.local/bin` 塞软链——那是全局副作用，与本设计一直守的原则相抵
 
-正确做法：**`session-start.sh` 生成注入文本时，把自己所在目录的绝对路径填进去。** hook 脚本天然知道自己在哪（`$(dirname "$0")`），`${CLAUDE_PLUGIN_ROOT}` 也由 Claude Code 在调用时给出。于是每个 session 注入的协议里带的都是当次有效的真实路径：
+正确做法：**`session-start.py` 生成注入文本时，把自己所在目录的绝对路径填进去。** hook 脚本天然知道自己在哪（`$(dirname "$0")`），`${CLAUDE_PLUGIN_ROOT}` 也由 Claude Code 在调用时给出。于是每个 session 注入的协议里带的都是当次有效的真实路径：
 
 ```
   qna-add 的完整路径每 session 由 SessionStart 注入，形如
   /Users/…/plugins/cache/qna-marketplace/qna/0.1.0/scripts/qna-add
 ```
 
-`pre-tool-use.sh` 和 `session-start.sh` 自己不受影响——它们的路径由 `hooks.json` 里的 `${CLAUDE_PLUGIN_ROOT}` 解析，Claude Code 负责替换。
+`pre-tool-use.py` 和 `session-start.py` 自己不受影响——它们的路径由 `hooks.json` 里的 `${CLAUDE_PLUGIN_ROOT}` 解析，Claude Code 负责替换。
+
+### 一切走脚本 —— 项目目录也必须注入，不能让模型算
+
+脚本路径要注入，这一条原设计就写对了。漏掉的是**另一半：`.qna/` 在哪**。原方案让模型自己拼 `${CLAUDE_PROJECT_DIR:-$PWD}/.qna/<sid>.active`，实测三处不成立：
+
+| 事实 | 后果 |
+|---|---|
+| 模型跑命令的那个 shell 里**没有** `CLAUDE_PROJECT_DIR`（已实测：未设置） | 路径必然回落 `$PWD`，"项目根"这个概念在写侧根本不存在 |
+| hook 侧用 payload 里的 `cwd`，与 `$PWD` 是两个独立来源 | 会话起在子目录或中途 `cd`，写侧与读侧指向不同目录 |
+| `touch` 不建父目录 | `.qna/` 尚不存在时第 0 步直接失败 |
+
+三条都通向同一个结果，而且是最坏的那种：**找不到标记 = 判定 `/qna:ask` 没在跑 = 全部放行**。R2/R4 那道硬闸整程失效，退回成纯 prompt 约束——恰是本设计最想避免的事——而且失效时没有任何提示。
+
+修法一句话：**凡是要落在磁盘上的位置，都由脚本算、由注入带，模型只照抄。**
+
+```
+SessionStart 定锚一次:  find_session_dir(payload.cwd, sid)
+                        已有该 session 文件的目录优先，否则用 cwd
+
+注入四条，每条都带绝对 --project:
+  QNA_ADD      记录
+  QNA_RESOLVE  归档
+  QNA_MARK     开关校验器（--on / --off）
+  QNA_FILE     pending 文件的绝对路径，供 Read
+
+hook 读侧:  find_session_dir 按 session id 逐级向上找
+            文件名带 session id → 命中即证明是对的目录
+            撞不到别人的 .qna/（那里不会有本 session 的文件）
+```
+
+`qna-mark` 因此成为 v1 的第四个脚本。它不是为了少打几个字——**它是把一个静默失效的口子换成一个不可能拼错的调用。**
 
 ### 安装
 
 ```shell
-/plugin marketplace add ~/dev/skills/claude-code-qna
+# 一条 curl（装 main）
+curl -fsSL https://raw.githubusercontent.com/jinhuang712/claude-code-qna/main/reinstall.sh | bash
+
+# 或会话内两条
+/plugin marketplace add jinhuang712/claude-code-qna
 /plugin install qna@qna-marketplace
-/reload-plugins
+```
+
+装完必须**重开会话**——协议走 `SessionStart`，当前会话拿不到。
+
+### 重装：`reinstall.sh`
+
+卸载 → 移除 marketplace → 铲缓存克隆 → 重装 → 校验。存在的理由是一个陷阱：**`claude plugin update` 只比 `plugin.json` 里的 `version` 字符串，不 git pull 缓存里那份克隆**——改了插件却没提版本号，它回报 "already at the latest" 然后什么都不做。
+
+在 clone 里跑装的是**工作区当前状态**（含未 commit 的改动），且 `tests/smoke.sh` 不过就拒绝安装：
+
+```shell
+bash reinstall.sh              # 有仓库就装工作区，否则装 main
+bash reinstall.sh --remote     # 强制装 main
+bash reinstall.sh --local      # 强制装工作区
 ```
 
 ### 卸载
 
 ```shell
-/plugin uninstall qna@qna-marketplace
+claude plugin uninstall qna@qna-marketplace
+claude plugin marketplace remove qna-marketplace
 ```
 
-**全局零残留**：不写 `settings.json`，不改 `CLAUDE.md`，不往 `PATH` 放东西。
+**全局副作用只有插件机制固有的那两条**，任何插件都一样：`~/.claude/settings.json` 里的 `enabledPlugins["qna@qna-marketplace"]` 与 `extraKnownMarketplaces["qna-marketplace"]`——`marketplace add` 的输出里明说 "declared in user settings"——上面两条命令会各自删掉。除此之外不改 `CLAUDE.md`、不往 `PATH` 放东西、不动 shell 配置。
 
 **但项目里有残留**：用过 `/qna` 的每个项目都留着一个 `.qna/` 目录。它被自身的 `.gitignore` 忽略、不进版本库，但卸载插件不会删它。要清就 `find ~ -type d -name .qna -prune -exec rm -rf {} +`。
 
 ### 迭代
 
-```shell
-/plugin marketplace update
-/reload-plugins
-```
+改完源码跑 `bash reinstall.sh`，然后重开会话。
+
+`claude plugin marketplace update` 只刷新 marketplace 元数据，`claude plugin update` 只比版本号——两者都可能让改动落不进去，`reinstall.sh` 铲缓存是唯一稳的路。

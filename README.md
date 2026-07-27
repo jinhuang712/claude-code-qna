@@ -7,6 +7,8 @@ into questions you can click.
 /qna:ask
 ```
 
+Run it whenever you would otherwise have typed *"so what do I need to decide?"*
+
 ## The problem
 
 Ask Claude Code what is still outstanding and you tend to get a wall of text:
@@ -66,13 +68,28 @@ actually weighed at the time, not three invented on the spot.
 ## Install
 
 ```
-/plugin marketplace add jinhuang712/claude-code-qna
-/plugin install qna@qna-marketplace
-/reload-plugins
+curl -fsSL https://raw.githubusercontent.com/jinhuang712/claude-code-qna/main/reinstall.sh | bash
 ```
 
-Then just work. Run `/qna:ask` whenever you would otherwise have typed *"so what
-do I need to decide?"*
+Then **open a new session** — the protocol arrives through a `SessionStart` hook,
+so whatever session you were in does not have it.
+
+**That same line is also how you update or repair it.** Run it again: it
+uninstalls, drops the marketplace, deletes the cached clone, and installs `main`
+fresh. Nothing else reliably does that — `claude plugin update` only compares the
+`version` string in `plugin.json` and never re-pulls the cache, so an edit
+without a version bump reports "already at the latest" and changes nothing.
+
+### Working on the plugin itself
+
+From a clone, the same script installs **the working tree**, uncommitted changes
+included, and refuses to install at all if `tests/smoke.sh` fails:
+
+```
+bash reinstall.sh              # working tree if in a clone, else main
+bash reinstall.sh --remote     # force main
+bash reinstall.sh --local      # force working tree
+```
 
 ## How it works
 
@@ -99,6 +116,8 @@ do I need to decide?"*
                                        |
   ==========  you run /qna:ask  ========|=================
                                        |
+              qna-mark --on            |   validator armed, 30 min
+                        |              |
                     read file <--------+
                         |
         scan conversation
@@ -120,6 +139,12 @@ do I need to decide?"*
                         |               +--- no preview         -> denied
                         v
                   decision list --> stop
+                        |
+              qna-mark --off               validator stood down
+
+  ============  at the end of a turn  ============
+       Stop hook --> count changed?  ->  "qna: 3 parked"
+                     unchanged       ->  silence
 ```
 
 ### Enforce in code what code can enforce
@@ -135,6 +160,7 @@ of instruction a model drifts away from, so neither is left as an instruction.
 | Archiving requires quoting the user | |
 | Three to four options per question | |
 | Every single-select option has a preview | |
+| Where files land — every path is injected, never worked out by the model | |
 
 A refusal is phrased to name the thinking gap, not the missing field:
 
@@ -152,6 +178,16 @@ worked out where that option leads.
 
 The question validator is scoped to `/qna:ask` by a self-expiring marker file,
 so ordinary questions elsewhere in your session are untouched.
+
+Nothing works out a path for itself. Every command is injected at session start
+carrying this session's id and this project's absolute path, because the shell
+Claude runs commands in has no `CLAUDE_PROJECT_DIR` and the working directory
+moves — and a marker written to the wrong place is indistinguishable from no
+marker at all, which reads as "not inside `/qna:ask`" and lets every question
+through unchecked.
+
+`tests/smoke.sh` asserts all of it: 47 cases, no dependencies, temp directory,
+quiet unless something fails.
 
 ## Deliberately not doing
 
@@ -173,8 +209,8 @@ so ordinary questions elsewhere in your session are untouched.
 ```
 <project>/.qna/.gitignore      a single "*" — the directory hides itself
 <project>/.qna/<session>.md    parked decisions
-<project>/.qna/<session>.meta  transcript path, for quote verification
-<project>/.qna/<session>.active  marker, live only while /qna:ask runs
+<project>/.qna/<session>.meta  transcript path, plus the last count reported
+<project>/.qna/<session>.active  qna-mark's marker, live only while /qna:ask runs
 ```
 
 Files untouched for 30 days are swept at session start.
@@ -182,12 +218,15 @@ Files untouched for 30 days are swept at session start.
 ## Uninstall
 
 ```
-/plugin uninstall qna@qna-marketplace
+claude plugin uninstall qna@qna-marketplace
+claude plugin marketplace remove qna-marketplace
 ```
 
-Nothing global is left behind — no `settings.json` edits, no `CLAUDE.md` edits,
-nothing added to `PATH`. Per-project `.qna/` directories do remain; clear them
-with:
+The only global footprint is the pair of entries any plugin install writes to
+`~/.claude/settings.json` — `enabledPlugins` and `extraKnownMarketplaces` — and
+the two commands above remove them. No `CLAUDE.md` edits, nothing added to
+`PATH`, no shell config touched. Per-project `.qna/` directories do remain; clear
+them with:
 
 ```
 find ~ -type d -name .qna -prune -exec rm -rf {} +
@@ -197,7 +236,7 @@ find ~ -type d -name .qna -prune -exec rm -rf {} +
 
 The full design, including the reasoning behind each rule and the alternatives
 that were rejected, is in
-[`docs/design.md`](docs/design.md) (written in Chinese).
+[`specs/design.md`](specs/design.md) (written in Chinese).
 
 ## License
 
