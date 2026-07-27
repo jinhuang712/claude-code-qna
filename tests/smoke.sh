@@ -300,10 +300,10 @@ d = json.load(open(p))
 d.pop("reported_count", None)
 json.dump(d, open(p, "w"))
 PY
-hook "reports the first time" "qna: 2 decision(s) parked" stop-count.py "$STOP_PAYLOAD"
+hook "reports the first time" "2 decisions recorded here and still open" stop-count.py "$STOP_PAYLOAD"
 hook "stays silent when unchanged" "" stop-count.py "$STOP_PAYLOAD"
 $RESOLVE 2 --result "no custom dir" --quote "use SQLite" >/dev/null
-hook "reports again when the count changes" "qna: 1 decision(s) parked" stop-count.py "$STOP_PAYLOAD"
+hook "reports again when the count changes" "1 decision recorded here and still open" stop-count.py "$STOP_PAYLOAD"
 hook "stays silent at zero" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "empty-session" "$PROJ")"
 hook "counts from a nested cwd" "" stop-count.py \
@@ -312,70 +312,98 @@ hook "counts from a nested cwd" "" stop-count.py \
 # ------------------------------------------------------- unrecorded-work nudge
 printf '=== unrecorded-work nudge\n'
 # The protocol is injected once and never mentioned again. Measured on a real
-# session: 84 conversation turns, 49 questions asked, qna-add run zero times,
-# and this hook silent throughout because the count never left zero.
+# session: 84 conversation turns, 49 questions asked, qna-add run zero times, and
+# this hook silent throughout because the count never left zero.
 NUDGE_PROJ="$WORK/nudgeproj"
 NUDGE_T="$WORK/nudge.jsonl"
+NUDGE_GEN="$WORK/mk_transcript.py"
 mkdir -p "$NUDGE_PROJ"
-mk_replies() { # <count> — plus a tool-call entry each, which must not be counted
-  python3 - "$NUDGE_T" "$1" <<'PY'
+
+cat >"$NUDGE_GEN" <<'GENEOF'
 import json, sys
-with open(sys.argv[1], "w") as f:
-    for i in range(int(sys.argv[2])):
-        f.write(json.dumps({"type": "assistant", "uuid": f"a{i}",
+path, replies = sys.argv[1], int(sys.argv[2])
+marks = [int(x) for x in sys.argv[3:]]
+with open(path, "w") as f:
+    for i in range(replies):
+        # A reply and a tool call. Only the reply counts; counting every
+        # assistant entry inflates the number several times over.
+        f.write(json.dumps({"type": "assistant", "uuid": "a%d" % i,
                             "timestamp": "2026-07-27T01:00:00Z",
                             "message": {"role": "assistant",
                                         "content": [{"type": "text", "text": "reply"}]}}) + "\n")
-        f.write(json.dumps({"type": "assistant", "uuid": f"t{i}",
+        f.write(json.dumps({"type": "assistant", "uuid": "t%d" % i,
                             "timestamp": "2026-07-27T01:00:00Z",
                             "message": {"role": "assistant",
                                         "content": [{"type": "tool_use", "name": "Bash",
                                                      "input": {}}]}}) + "\n")
-PY
-}
+    for n in marks:
+        f.write(json.dumps({"type": "attachment", "attachment": {
+            "type": "hook_additional_context",
+            "content": ["qna: %d replies, nothing recorded in this session." % n]}}) + "\n")
+GENEOF
+
+mk_transcript() { python3 "$NUDGE_GEN" "$NUDGE_T" "$@"; }
 NUDGE_PAYLOAD=$(printf '{"session_id":"nudged","cwd":"%s","transcript_path":"%s"}' \
   "$NUDGE_PROJ" "$NUDGE_T")
+nudge_out() { printf '%s' "$NUDGE_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1; }
 
-mk_replies 14
-hook "stays quiet before the first milestone" "" stop-count.py "$NUDGE_PAYLOAD"
-mk_replies 15
-hook "nudges at the first milestone" "nothing has been parked" stop-count.py "$NUDGE_PAYLOAD"
-hook "spells out the qna-add line" "qna-add --session nudged --project $NUDGE_PROJ" \
-  stop-count.py "$NUDGE_PAYLOAD"
+mk_transcript 14
+hook "stays quiet before the first stride" "" stop-count.py "$NUDGE_PAYLOAD"
+mk_transcript 15
+hook "nudges at the first stride" "qna: 15 replies, nothing recorded" stop-count.py "$NUDGE_PAYLOAD"
 hook "says finding nothing is an answer" "that is a real answer" stop-count.py "$NUDGE_PAYLOAD"
 
-# Nudges are counted out of the transcript, so having sent one is remembered
-# without writing anywhere — a Stop hook with nowhere safe to write is why this
-# hook was silent in the first place.
-python3 - "$NUDGE_T" <<'PY'
-import json, sys
-with open(sys.argv[1], "a") as f:
-    f.write(json.dumps({"type": "attachment", "attachment": {
-        "type": "hook_additional_context",
-        "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
-PY
-hook "does not nudge twice for the same stride" "" stop-count.py "$NUDGE_PAYLOAD"
+# A nudge-driven recording attempt was refused over --where the first time this
+# ran for real, so the nudge names what --where accepts.
+hook "nudge explains what --where takes" "the file:line you changed" stop-count.py "$NUDGE_PAYLOAD"
 
-# Fixed stride, not a thinning series: with one nudge sent, the next is due at 30
-# replies, not at some further-out milestone.
-mk_replies 29
-python3 - "$NUDGE_T" <<'PY2'
-import json, sys
-with open(sys.argv[1], "a") as f:
-    f.write(json.dumps({"type": "attachment", "attachment": {
-        "type": "hook_additional_context",
-        "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
-PY2
-hook "still quiet one reply short of the next stride" "" stop-count.py "$NUDGE_PAYLOAD"
-mk_replies 30
-python3 - "$NUDGE_T" <<'PY2'
-import json, sys
-with open(sys.argv[1], "a") as f:
-    f.write(json.dumps({"type": "attachment", "attachment": {
-        "type": "hook_additional_context",
-        "content": ["[qna-unrecorded-nudge] 15 replies into this session"]}}) + "\n")
-PY2
-hook "nudges again at the second stride" "30 replies into this session" stop-count.py "$NUDGE_PAYLOAD"
+# The user reads this text too, so it stays short. The first version was a
+# 150-word instruction block ending in "do not mention this check to the user",
+# written on the assumption nobody would see it; Claude Code renders Stop hook
+# output as feedback in the transcript, and the user read all of it.
+NUDGE_LEN=$(nudge_out | python3 -c \
+  'import json,sys; print(len(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]))')
+if [ "$NUDGE_LEN" -lt 900 ]; then
+  pass "nudge text stays short enough to read ($NUDGE_LEN chars)"
+else
+  fail "nudge text stays short enough to read" "$NUDGE_LEN chars, wanted under 900"
+fi
+if nudge_out | grep -qF "do not mention this check"; then
+  fail "nudge does not order the model to hide it" "still telling the model to conceal it"
+else
+  pass "nudge does not order the model to hide it"
+fi
+
+# Already nudged at 15: silent until 30, then due again. Reading the last count
+# out of the visible text is what makes this work — counting nudges and
+# multiplying by the stride fires a burst the moment a session starts past
+# several strides.
+mk_transcript 29 15
+hook "quiet one reply short of the next stride" "" stop-count.py "$NUDGE_PAYLOAD"
+mk_transcript 30 15
+hook "nudges again at the next stride" "qna: 30 replies" stop-count.py "$NUDGE_PAYLOAD"
+
+# Mid-session install: the count arrives already past several strides. One nudge,
+# not one per stride skipped.
+mk_transcript 97
+hook "one nudge, not a catch-up burst" "qna: 97 replies" stop-count.py "$NUDGE_PAYLOAD"
+mk_transcript 97 97
+hook "quiet right after that nudge" "" stop-count.py "$NUDGE_PAYLOAD"
+
+# The command only rides along when the session never got the protocol.
+mk_transcript 15
+hook "carries the command when the protocol is absent" "qna-add --session nudged" \
+  stop-count.py "$NUDGE_PAYLOAD"
+python3 -c 'import json,sys
+open(sys.argv[1], "a").write(json.dumps({"type": "attachment", "attachment": {
+    "type": "hook_additional_context",
+    "content": ["## Open-decision log (qna)"]}}) + "\n")' "$NUDGE_T"
+if nudge_out | grep -qF "so the command is"; then
+  fail "omits the command when the protocol is in context" "spelled it out anyway"
+else
+  pass "omits the command when the protocol is in context"
+fi
+
 if [ -e "$NUDGE_PROJ/.qna" ]; then
   fail "nudging leaves no .qna/ behind" "$(ls -a "$NUDGE_PROJ/.qna" | tr '\n' ' ')"
 else
@@ -390,8 +418,17 @@ mkdir -p "$RECORDED"
   --title "already parked" --chose "a" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null
 BUSY_PAYLOAD=$(printf '{"session_id":"busy","cwd":"%s","transcript_path":"%s"}' \
   "$RECORDED" "$NUDGE_T")
-hook "a session with entries gets the count" "1 decision(s) parked" stop-count.py "$BUSY_PAYLOAD"
-if printf '%s' "$BUSY_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1 | grep -qF "$(printf 'unrecorded-nudge')"; then
+busy_out() { printf '%s' "$BUSY_PAYLOAD" | "$SCRIPTS/stop-count.py" 2>&1; }
+
+# Self-contained: naming the item is what makes the line mean anything. "qna: 1
+# parked" told the user nothing — in their words, "no idea what this means".
+hook "the count names the item" "already parked" stop-count.py "$BUSY_PAYLOAD"
+if busy_out | grep -qF "Surface this"; then
+  fail "the count is not echoed back by the model" "still asking the model to repeat it"
+else
+  pass "the count is not echoed back by the model"
+fi
+if busy_out | grep -qF "nothing recorded"; then
   fail "a session with entries is never nudged" "got the nudge as well as the count"
 else
   pass "a session with entries is never nudged"

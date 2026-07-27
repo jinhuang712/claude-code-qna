@@ -31,14 +31,24 @@ NEED_ALTS = (
     "engineer might genuinely prefer, this is an implementation detail, not a "
     "decision. Do not record it."
 )
+# The two refusals below are verdicts on the citation, not on the entry, and say
+# so out loud. The protocol tells the model that a refusal is the answer and the
+# item should be dropped — true for NEED_ALTS, which really does mean "this was
+# an implementation detail". Applied to a bad --where it silently throws away a
+# real decision, which is what happened the first time a nudge produced a
+# recording attempt: paraphrased words, refused, entry abandoned.
+CITATION_ONLY = (
+    " This is a verdict on the citation, not on the entry: if it really was a "
+    "decision, fix the citation and run it again rather than dropping it."
+)
 BAD_WHERE = (
     "Refused: --where must be either a real file:line or something actually "
-    "said in this conversation. If you can point at neither, you are not "
-    "recording a decision that happened."
+    "said in this conversation." + CITATION_ONLY
 )
 NOT_SAID = (
-    "Refused: those words do not appear in this conversation. Quote what was "
-    "actually said, or point at a real file:line."
+    "Refused: those words do not appear in this conversation. Quote verbatim "
+    "rather than from memory, or point at the file:line you actually changed — "
+    "for a decision about code that is nearly always to hand." + CITATION_ONLY
 )
 
 FILE_LINE_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+)$")

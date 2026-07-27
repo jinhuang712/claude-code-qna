@@ -158,11 +158,14 @@ bash reinstall.sh --local      # force working tree
               qna-scan --mark                next scan starts here
 
   ============  at the end of a turn  ============
-       Stop hook --> count changed?  ->  "qna: 3 parked"
+       Stop hook --> count changed?  ->  names the newest open item
                      unchanged       ->  silence
                      nothing ever
-                     recorded?       ->  re-surface the protocol
-                                         at 15 / 45 / 90 replies
+                     recorded?       ->  re-surface the protocol,
+                                         every 15 replies
+
+       Both lines are shown to you, not just to Claude — so neither
+       asks Claude to repeat them back.
 ```
 
 ### Enforce in code what code can enforce
@@ -225,7 +228,7 @@ Claude runs commands in has no `CLAUDE_PROJECT_DIR` and the working directory
 moves — and a file written to the wrong place fails without failing: the pending
 list silently reads as empty, and the scan silently re-reads the whole session.
 
-`tests/smoke.sh` asserts all of it: 84 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 90 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ### Reading the conversation without reading the transcript

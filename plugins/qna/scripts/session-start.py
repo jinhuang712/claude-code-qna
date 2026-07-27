@@ -74,8 +74,14 @@ Never record:
 Several decisions in one turn: run it once per decision. Do not pack unrelated
 choices into one entry.
 
-If it refuses, do not work around it. The refusal is the answer: that item was
-not a decision.
+If it refuses over `--alt`, do not work around it. That refusal is the answer:
+the item was an implementation detail, not a decision.
+
+A refusal over `--where` means something else — the citation did not check out,
+not that the item was unworthy. Fix the citation and run it again. `--where`
+takes the `file:line` you actually changed, or words the user said **verbatim**;
+a paraphrase from memory will not resolve, and for a decision about code the
+file is the easier of the two.
 
 ### 2. The user explicitly defers something
 
