@@ -17,15 +17,29 @@ overview how many out-of-topic items you left untouched.
 
 ## 0. Switch the validator on
 
-First action, before anything else:
+First action, before anything else. `QNA_MARK` is a full command line
+SessionStart injected into your context for this session — a **label in that
+text, not a shell variable**. Nothing exports it, so `$QNA_MARK` expands to
+nothing. Paste the whole line and append `--on`:
 
 ```
-touch "${CLAUDE_PROJECT_DIR:-$PWD}/.qna/<session_id>.active"
+<the QNA_MARK line from the qna block> --on
 ```
 
-That marker turns on the `PreToolUse` validator for the rest of this command.
-**Delete it as the last action, always** — including when you stop early or the
-user interrupts. It self-expires after 30 minutes, but do not rely on that.
+That turns on the `PreToolUse` validator for the rest of this command, which is
+what makes R2 and R4 below real rather than advisory. **Switch it off as the
+last action, always** (same line, `--off`) — including when you stop early or
+the user interrupts. It self-expires after 30 minutes, but do not rely on that.
+
+Never assemble these paths yourself. The shell has no `CLAUDE_PROJECT_DIR` and
+the working directory can move, so a hand-built path may not be the one the
+hooks read — and a marker written somewhere else is indistinguishable from no
+marker at all: every question would pass unchecked, silently.
+
+If `QNA_MARK` is not in your context, SessionStart did not run in this session
+(the plugin was installed mid-session). Say so, and that the question validator
+is off for this run, then carry on — the rules below still apply, they are just
+not enforced.
 
 ## 1. Scan
 
@@ -48,7 +62,9 @@ questions you *raised*. It looks like "I lean towards A, but B has a case",
 "worth thinking about", "one thing to watch out for", or a closing list of
 things to note.
 
-**The pending file**, `${CLAUDE_PROJECT_DIR:-$PWD}/.qna/<session_id>.md`.
+**The pending file** — `Read` the absolute path SessionStart injected as
+`QNA_FILE`. If it does not exist yet, nothing has been parked; the conversation
+is your only source.
 
 ## 2. Filter
 
@@ -250,4 +266,4 @@ Then clean up the file:
 - Skipped because of the scope gate: **keep** — the user never ruled on them
 - Left deliberately open (the user chose Other and said "let me think"): keep
 
-Finally, delete the `.active` marker.
+Finally, switch the validator off — the same `QNA_MARK` line, with `--off`.

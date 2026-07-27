@@ -13,6 +13,7 @@ makes the protocol survive a compressed context.
 """
 
 import os
+import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,19 +24,37 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROTOCOL = """## Open-decision log (qna)
 
 Three protocols for this session, plus current state at the bottom.
-The command prefix below already encodes this session — use it verbatim.
+
+Every command below already carries this session and this project's absolute
+path — paste them as they stand and never rebuild a path by hand. The shell has
+no CLAUDE_PROJECT_DIR and the working directory can move, so a path assembled at
+call time may not be the one the hooks read.
 
   QNA_ADD     = {add}
   QNA_RESOLVE = {resolve}
+  QNA_MARK    = {mark}
+  QNA_FILE    = {pending}
+
+**Those four names are labels in this text, not shell variables.** Nothing
+exports them: a hook cannot set the environment of the shell you run commands
+in, and that shell keeps no state between calls. `$QNA_ADD --title x` therefore
+expands to `--title x` and fails with "command not found" — which is not a
+refusal and must not be worked around. Paste the full line instead. Every
+example below already has it filled in.
+
+QNA_ADD and QNA_RESOLVE are the two you use while working. QNA_MARK takes --on
+or --off appended, and QNA_FILE is a path to Read; both belong to /qna:ask
+alone — ignore them otherwise.
 
 ### 1. You decided something the user has not signed off on
 
 Do not stop to ask. Keep working, then run:
 
-  $QNA_ADD --title <one line> --chose <what you did> \\
-           --alt <alternative> --alt <another> \\
-           --why <the tradeoff that made you pick it> \\
-           --where <file:line, or a phrase actually said in this conversation>
+  {add} \\
+      --title <one line> --chose <what you did> \\
+      --alt <alternative> --alt <another> \\
+      --why <the tradeoff that made you pick it> \\
+      --where <file:line, or a phrase actually said in this conversation>
 
 Record it only if all three hold:
   1. You can name two alternatives a competent engineer might genuinely prefer.
@@ -72,7 +91,8 @@ test is whether they settled it or shelved it.
 The moment the user states a position on a parked item, or its premise
 disappears, run:
 
-  $QNA_RESOLVE <id> --result <what was decided> --quote <the user's own words>
+  {resolve} <id> \\
+      --result <what was decided> --quote <the user's own words>
 
 Do it in the turn you notice it. Settling in the moment is far more accurate
 than reconstructing later, and it is what keeps /qna:ask from asking the user
@@ -97,7 +117,10 @@ def main():
     if not session:
         return 0
 
-    project = data.get("cwd")
+    # The anchor every injected command carries. On resume and after compaction
+    # this finds the directory the earlier files went to, so a session whose cwd
+    # has moved keeps writing to one place instead of forking a second .qna/.
+    project = qna_lib.find_session_dir(data.get("cwd"), session)
     transcript = data.get("transcript_path")
 
     meta = qna_lib.load_meta(session, project)
@@ -110,9 +133,23 @@ def main():
     except Exception:
         pass
 
-    prefix = "{} --session {}".format(os.path.join(HERE, "qna-add"), session)
-    resolve = "{} --session {}".format(os.path.join(HERE, "qna-resolve"), session)
-    text = PROTOCOL.format(add=prefix, resolve=resolve)
+    def cmd(name):
+        # Quoted: a plugin cache path or project path containing a space would
+        # otherwise inject a command that splits into the wrong arguments.
+        return "{} --session {} --project {}".format(
+            shlex.quote(os.path.join(HERE, name)),
+            shlex.quote(session),
+            shlex.quote(project),
+        )
+
+    text = PROTOCOL.format(
+        add=cmd("qna-add"),
+        resolve=cmd("qna-resolve"),
+        # No "--on|--off" suffix here: an unquoted pipe in an injected command
+        # line is a shell pipe, not documentation.
+        mark=cmd("qna-mark"),
+        pending=qna_lib.pending_path(session, project, create=False),
+    )
 
     open_items = qna_lib.open_entries(
         qna_lib.pending_path(session, project, create=False)

@@ -30,9 +30,41 @@ ORPHAN_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 def project_dir(override=None):
-    """Where .qna/ lives. CLAUDE_PROJECT_DIR is stable for a whole session;
-    cwd is not, so it is only the fallback."""
+    """Where .qna/ lives.
+
+    Callers must pass the anchor explicitly. SessionStart resolves it once and
+    injects it into every command it hands the model, because nothing else in
+    this system is stable: CLAUDE_PROJECT_DIR does not exist in the shell the
+    model runs commands in, so a path built there collapses to the working
+    directory, which moves. The env var and cwd remain as fallbacks only for a
+    hand-run script.
+    """
     return override or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+
+
+def find_session_dir(start, session, limit=8):
+    """Read-side anchor resolution for hooks.
+
+    The writing side is pinned by the injected --project. Hooks only get their
+    own cwd, which may sit below that anchor, so walk up for the directory that
+    actually holds this session's files. Filenames carry the session id, so a
+    hit is proof of the right directory and a stranger's .qna/ cannot match.
+    """
+    if not start:
+        return start
+    cur = os.path.abspath(start)
+    for _ in range(limit):
+        d = os.path.join(cur, ".qna")
+        if any(
+            os.path.exists(os.path.join(d, f"{session}{ext}"))
+            for ext in (".md", ".meta", ".active")
+        ):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return os.path.abspath(start)
 
 
 def qna_dir(project=None, create=True):

@@ -83,7 +83,10 @@ def main():
         return 0
 
     session = data.get("session_id")
-    if not session or not qna_lib.marker_is_live(session, data.get("cwd")):
+    if not session:
+        return 0
+    project = qna_lib.find_session_dir(data.get("cwd"), session)
+    if not qna_lib.marker_is_live(session, project):
         return 0
 
     questions = (data.get("tool_input") or {}).get("questions") or []
