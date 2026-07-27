@@ -97,6 +97,11 @@ q_two='{"header":"backend","question":"q","options":[{"label":"a","preview":"x"}
 q_five='{"header":"backend","question":"q","options":[{"label":"a","preview":"1"},{"label":"b","preview":"2"},{"label":"c","preview":"3"},{"label":"d","preview":"4"},{"label":"e","preview":"5"}]}'
 q_nopreview='{"header":"backend","question":"q","options":[{"label":"a","preview":"x"},{"label":"b"},{"label":"c","preview":"  "}]}'
 q_multi='{"header":"which","question":"q","multiSelect":true,"options":[{"label":"a"},{"label":"b"},{"label":"c"}]}'
+# Two check-boxes answer neither/A/B/both, so the yes/no floor does not apply.
+# Taken from a real refusal-that-should-not-have-been: "which of these two new
+# contract fields do you want", with exactly two candidate fields.
+q_multi_two='{"header":"fields","question":"which of these two","multiSelect":true,"options":[{"label":"tag_ids"},{"label":"reviews[].language"}]}'
+q_multi_one='{"header":"fields","question":"which","multiSelect":true,"options":[{"label":"only one"}]}'
 
 ask_payload() { # <cwd> <question-json>
   printf '{"session_id":"%s","cwd":"%s","tool_name":"AskUserQuestion","tool_input":{"questions":[%s]}}' \
@@ -270,6 +275,22 @@ hook "denies five options" "exceeds the tool cap" pre-tool-use.py "$(ask_payload
 hook "denies missing preview" "have no preview: b, c" pre-tool-use.py "$(ask_payload "$PROJ" "$q_nopreview")"
 hook "allows three with previews" "" pre-tool-use.py "$(ask_payload "$PROJ" "$q_ok")"
 hook "allows multiSelect without preview" "" pre-tool-use.py "$(ask_payload "$PROJ" "$q_multi")"
+hook "allows a two-item multiSelect" "" pre-tool-use.py "$(ask_payload "$PROJ" "$q_multi_two")"
+hook "denies a one-item multiSelect" "not something to choose between" pre-tool-use.py \
+  "$(ask_payload "$PROJ" "$q_multi_one")"
+# ...and single-select keeps the higher floor, with the yes/no diagnosis.
+hook "single-select still needs three" "yes/no question in disguise" pre-tool-use.py \
+  "$(ask_payload "$PROJ" "$q_two")"
+
+# A payload the harness could not parse carries no questions, so every rule
+# above passes on an empty list and the malformed call proceeds unremarked.
+UNPARSED=$(python3 -c '
+import json, sys
+print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2],
+                  "tool_name": "AskUserQuestion",
+                  "tool_input": {"__unparsedToolInput": {"raw": "{\"questions\": [{\"quest"}}}))
+' "$SID" "$PROJ")
+hook "denies an unparsed payload" "did not parse" pre-tool-use.py "$UNPARSED"
 hook "ignores other tools" "" pre-tool-use.py \
   "$(printf '{"session_id":"%s","cwd":"%s","tool_name":"Bash","tool_input":{"command":"ls"}}' "$SID" "$PROJ")"
 # The bug this fix exists for: a cwd below the anchor must still validate.
@@ -303,6 +324,37 @@ hook "stays silent at zero" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "empty-session" "$PROJ")"
 hook "counts from a nested cwd" "" stop-count.py \
   "$(printf '{"session_id":"%s","cwd":"%s"}' "$SID" "$PROJ/src/deep/nested")"
+
+# ------------------------------------------------------------- orphan sweeping
+printf '=== orphan sweep\n'
+# A swept-clean directory that stays behind is litter outliving its reason. Seen
+# for real: /Users/.../dev/.qna holding nothing but .gitignore and two stale
+# bookkeeping files, in a directory that is not a project at all.
+STALE="$WORK/stale"
+mkdir -p "$STALE/.qna"
+printf '*\n' >"$STALE/.qna/.gitignore"
+printf '{"reported_count": 0}' >"$STALE/.qna/old-session.meta"
+touch -t 202001010000 "$STALE/.qna/old-session.meta"
+printf '{"session_id":"sweeper","cwd":"%s","transcript_path":"%s"}' "$STALE" "$TRANSCRIPT" |
+  "$SCRIPTS/session-start.py" >/dev/null 2>&1
+if [ -e "$STALE/.qna" ]; then
+  fail "sweep removes the emptied directory" "still there: $(ls -a "$STALE/.qna" | tr '\n' ' ')"
+else
+  pass "sweep removes the emptied directory"
+fi
+
+# It must not take a directory that is still in use with it.
+LIVE="$WORK/live"
+mkdir -p "$LIVE"
+"$SCRIPTS/qna-add" --session live-session --project "$LIVE" --transcript "$TRANSCRIPT" \
+  --title "keep me" --chose "a" --alt "b" --alt "c" --why "w" --where "$SAID" >/dev/null 2>&1
+printf '{"session_id":"live-session","cwd":"%s","transcript_path":"%s"}' "$LIVE" "$TRANSCRIPT" |
+  "$SCRIPTS/session-start.py" >/dev/null 2>&1
+if [ -f "$LIVE/.qna/live-session.md" ]; then
+  pass "sweep spares a directory with live entries"
+else
+  fail "sweep spares a directory with live entries" "the pending file went away"
+fi
 
 # --------------------------------------------------------------------- qna-scan
 printf '=== qna-scan\n'

@@ -130,15 +130,19 @@ def main():
     # project a session was ever opened in. The transcript path reaches qna-add
     # through the injected command line instead, so nothing needs to be on disk
     # before the first entry.
-    if transcript and qna_lib.qna_dir_exists(project):
-        meta = qna_lib.load_meta(session, project)
-        meta["transcript_path"] = transcript
-        qna_lib.save_meta(session, meta, project)
-
+    # Sweep first. Writing bookkeeping and then sweeping means the file just
+    # written is always fresh, so a directory whose every entry has expired
+    # never reaches the empty state that lets it be removed — it would be
+    # refilled a moment before being inspected, every single session.
     try:
         qna_lib.sweep_orphans(project)
     except Exception:
         pass
+
+    if transcript and qna_lib.qna_dir_exists(project):
+        meta = qna_lib.load_meta(session, project)
+        meta["transcript_path"] = transcript
+        qna_lib.save_meta(session, meta, project)
 
     def cmd(name, transcript_too=False):
         # Quoted: a plugin cache path or project path containing a space would

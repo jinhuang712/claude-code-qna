@@ -20,6 +20,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import qna_lib  # noqa: E402
 
 MIN_OPTIONS = 3
+# A multi-select is not measured the same way. The floor of 3 exists to stop a
+# yes/no wearing a costume, and two check-boxes are not a yes/no: they answer
+# neither / A / B / both. Holding multi-select to 3 also breaks G2.6 outright —
+# "which of these fields do you want" frequently has exactly two candidates, and
+# refusing it forces the question back into the pair of yes/no questions that
+# multi-select exists to collapse.
+MIN_OPTIONS_MULTI = 2
 MAX_OPTIONS = 4
 
 
@@ -43,8 +50,15 @@ def check(questions):
         label = q.get("header") or q.get("question", "")[:40] or f"question {i}"
         options = q.get("options") or []
         n = len(options)
+        multi = bool(q.get("multiSelect"))
 
-        if n < MIN_OPTIONS:
+        if multi and n < MIN_OPTIONS_MULTI:
+            return (
+                f'Refused ("{label}"): {n} option is not something to choose '
+                f"between. A multi-select needs at least {MIN_OPTIONS_MULTI} "
+                f"items on the list."
+            )
+        if not multi and n < MIN_OPTIONS:
             return (
                 f'Refused ("{label}"): {n} options is a yes/no question in '
                 f"disguise. Every question needs at least {MIN_OPTIONS} formed, "
@@ -58,7 +72,7 @@ def check(questions):
                 f"{MAX_OPTIONS}."
             )
 
-        if q.get("multiSelect"):
+        if multi:
             # preview does not render for multiSelect, so detail has to live in
             # the descriptions instead. Nothing to enforce here.
             continue
@@ -89,8 +103,23 @@ def main():
     if not qna_lib.marker_is_live(session, project):
         return 0
 
-    questions = (data.get("tool_input") or {}).get("questions") or []
-    reason = check(questions)
+    tool_input = data.get("tool_input") or {}
+
+    # A payload that failed to parse arrives with the raw text under
+    # __unparsedToolInput and no questions at all, so every rule below silently
+    # passes and the call goes on to fail for reasons that name none of this.
+    # Observed once in a real session: the next attempt was a two-option
+    # question, which suggests the model read the failure as "ask something
+    # smaller" rather than "resend that". Refusing puts the cause in writing.
+    if "__unparsedToolInput" in tool_input:
+        return deny(
+            "Refused: the question payload did not parse, so none of the asking "
+            "rules could be checked. This is almost always size — the previews "
+            "are the usual culprit. Shorten them and send the same questions "
+            "again; do not simplify the questions to get around it."
+        )
+
+    reason = check(tool_input.get("questions") or [])
     if reason:
         return deny(reason)
     return 0

@@ -141,7 +141,9 @@ bash reinstall.sh --local      # force working tree
                         |               ^
                         |               |  PreToolUse validator
                         |               +--- under 3 options    -> denied
+                        |               |    (multi-select: 2)
                         |               +--- no preview         -> denied
+                        |               +--- payload unparsed   -> denied
                         v
                   decision list --> stop
                         |
@@ -166,8 +168,9 @@ of instruction a model drifts away from, so neither is left as an instruction.
 | At least two alternatives per entry | Whether something counts as a decision |
 | `--where` resolves to a real file:line **or** words actually said in the conversation | Whether the conversation has settled it |
 | Archiving requires quoting the user | |
-| Three to four options per question | |
+| Three to four options per question — two is enough for a multi-select, where two boxes answer neither/A/B/both | |
 | Every single-select option has a preview | |
+| A payload that failed to parse is refused rather than waved through unchecked | |
 | Where files land — every path is injected, never worked out by the model | |
 | Which stretch of conversation is unscanned — the watermark is read and written by `qna-scan`, never reasoned about | |
 
@@ -207,7 +210,7 @@ moves — and a marker written to the wrong place is indistinguishable from no
 marker at all, which reads as "not inside `/qna:ask`" and lets every question
 through unchecked.
 
-`tests/smoke.sh` asserts all of it: 77 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 83 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ### Reading the conversation without reading the transcript
@@ -260,6 +263,10 @@ that point survives only as a summary.
 The directory appears only when something is actually recorded. The hooks run in
 every project you open, so they check for it and write nothing if it is absent —
 otherwise every project you ever started a session in would collect an empty one.
+
+It also leaves the same way. When the 30-day sweep clears the last file, the
+directory goes with it: sweeping the contents and keeping the container means
+the litter outlives its reason.
 
 Files untouched for 30 days are swept at session start.
 

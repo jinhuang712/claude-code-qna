@@ -261,6 +261,17 @@ def sweep_orphans(project=None):
         except OSError:
             pass
 
+    # Nothing left but the file that hides the directory: take the directory
+    # too. Sweeping the contents and leaving the container behind means every
+    # project that ever held a single entry keeps an empty .qna/ forever — the
+    # litter outlives the reason for it. It comes back on the next qna-add.
+    try:
+        if os.listdir(d) == [".gitignore"]:
+            os.remove(os.path.join(d, ".gitignore"))
+            os.rmdir(d)
+    except OSError:
+        pass
+
 
 def hook_input():
     """Hook payload on stdin. Never raise: a broken hook must not break the
