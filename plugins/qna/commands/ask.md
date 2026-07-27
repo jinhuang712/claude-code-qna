@@ -148,27 +148,47 @@ last few turns right now.
 
 ## 5. Overview
 
-A count, then **one markdown table, one row per item**, then straight into the
-first question — no confirmation step. Never a fenced block of aligned monospace
-text: it reads as a ledger dump and it wraps badly.
+A count, then **one table per bucket** — and only the buckets that have rows —
+then straight into the first question, no confirmation step. What is settled and
+what is still open are different kinds of thing and never share a grid; split
+apart, each table carries the columns it actually needs instead of a generic
+"why". Never a fenced block of aligned monospace text either: it reads as a
+ledger dump and it wraps badly.
 
-**Scanned 11, 7 left to ask.**
+**Scanned 11 — 7 left to ask.**
 
-| Bucket | Item | Evidence / why |
+**Already decided**
+
+| Item | Where it landed | Your words |
 |---|---|---|
-| Decided | Default TTL → `300`s | you said "five minutes is fine" |
-| Decided | `--no-cache` → yes | you asked for it directly |
-| Moot | Cache filename format | backend is SQLite now, there are no filenames |
-| By default | Cache-hit logging at debug level | trivial, say so if you disagree |
-| Ask · heavy | Cache key: include the auth identity? | — |
-| Ask · heavy | Write failure: degrade silently or warn? | — |
-| Ask · light | When expiry cleanup runs | — |
+| Default TTL | `300`s | "five minutes is fine" |
+| `--no-cache` | shipped | "add the flag" |
 
-Close with one line inviting corrections. Reconciled rows always carry the
-evidence — the user's own words for decided, the reason for moot. That column is
-the only way a wrong call gets caught, so it is never left blank.
+**No longer applies**
 
-If the session has been compacted, say so above the table.
+| Item | Why |
+|---|---|
+| Cache filename format | backend is SQLite now, there are no filenames |
+
+**Handled by default** — say so if you disagree
+
+| Item | What I did |
+|---|---|
+| Cache-hit logging | debug level |
+
+**To ask · 7**
+
+| # | Weight | Question |
+|---|---|---|
+| 1 | heavy | Cache key: include the auth identity? |
+| 2 | heavy | Write failure: degrade silently or warn? |
+| 3 | light | When expiry cleanup runs |
+
+Close with one line inviting corrections. The two reconciled tables always carry
+their evidence column — the user's own words for decided, the reason for moot.
+That column is the only way a wrong call gets caught, so it is never left blank.
+
+If the session has been compacted, say so above the tables.
 
 ## 6. Scope gate
 
@@ -239,15 +259,34 @@ when you do, move what would have been in the preview into the descriptions.
 
 Print the decision list and **stop**. No "shall I start?", no edits.
 
-Same shape as the overview: one table, one row per item, no monospace ledger.
+Same shape as the overview: one table per bucket, only the buckets that have
+rows, no monospace ledger.
 
-| Bucket | Item | Result / why |
+**Decided**
+
+| Item | Result | Follow-on |
 |---|---|---|
-| Decided | Cache backend | `SQLite` — follow-on: concurrent writes, enable WAL |
-| Decided | Cache key | token fingerprint — follow-on: cache dir splits per token |
-| By default | Cache-hit logging | debug level |
-| Moot | Cache filename format | backend changed to SQLite |
-| Untouched | `#9` metrics for cache hit rate | outside the scope you picked |
+| Cache backend | `SQLite` | concurrent writes — enable WAL |
+| Cache key | token fingerprint | cache dir splits per token |
+| Write failure | warn, then degrade | — |
+
+**Handled by default**
+
+| Item | What I did |
+|---|---|
+| Cache-hit logging | debug level |
+
+**No longer applies**
+
+| Item | Why |
+|---|---|
+| Cache filename format | backend changed to SQLite |
+
+**Not touched this time**
+
+| Item | Why |
+|---|---|
+| `#9` metrics for cache hit rate | outside the scope you picked |
 
 Then one closing line for what is still open.
 

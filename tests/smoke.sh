@@ -134,6 +134,24 @@ else
   pass "no section-sign character in the docs"
 fi
 
+# One table per bucket. A generic "bucket / 归属" column means decided and
+# still-open were merged back into a single grid.
+lumped=$(grep -l -e '^| Bucket ' -e '^| 归属 ' \
+  "$DOCS/plugins/qna/commands/ask.md" "$DOCS/specs/design.md" "$DOCS/README.md" 2>/dev/null || true)
+if [ -n "$lumped" ]; then
+  fail "no combined bucket table in the docs" "still in: $lumped"
+else
+  pass "no combined bucket table in the docs"
+fi
+
+for want in '^\*\*Already decided\*\*' '^\*\*To ask' '^| # | Weight | Question |'; do
+  if grep -q -- "$want" "$DOCS/plugins/qna/commands/ask.md"; then
+    pass "ask.md keeps a split table: $want"
+  else
+    fail "ask.md keeps a split table: $want" "missing"
+  fi
+done
+
 # ---------------------------------------------------------------- SessionStart
 printf '=== SessionStart\n'
 START_PAYLOAD=$(printf '{"session_id":"%s","cwd":"%s","transcript_path":"%s","source":"startup"}' \

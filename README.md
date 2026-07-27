@@ -42,20 +42,39 @@ genuinely still open, and puts it to you as clickable questions — batched, in
 dependency order, each with real alternatives and a preview of where each one
 leads.
 
-**Scanned 11, 7 left to ask.**
+**Scanned 11 — 7 left to ask.**
 
-| Bucket | Item | Evidence / why |
+**Already decided**
+
+| Item | Where it landed | Your words |
 |---|---|---|
-| Decided | Default TTL → `300`s | you said "five minutes is fine" |
-| Decided | `--no-cache` → yes | you asked for it directly |
-| Moot | Cache filename format | backend is SQLite now, there are no filenames |
-| By default | Cache-hit logging at debug level | trivial, say so if you disagree |
-| Ask · heavy | Cache key: include the auth identity? | — |
-| Ask · heavy | Write failure: degrade silently or warn? | — |
-| Ask · light | When expiry cleanup runs | — |
+| Default TTL | `300`s | "five minutes is fine" |
+| `--no-cache` | shipped | "add the flag" |
 
-Every reconciled row carries its evidence, because that column is the only way a
-wrong "already decided" gets caught.
+**No longer applies**
+
+| Item | Why |
+|---|---|
+| Cache filename format | backend is SQLite now, there are no filenames |
+
+**Handled by default** — say so if you disagree
+
+| Item | What I did |
+|---|---|
+| Cache-hit logging | debug level |
+
+**To ask · 7**
+
+| # | Weight | Question |
+|---|---|---|
+| 1 | heavy | Cache key: include the auth identity? |
+| 2 | heavy | Write failure: degrade silently or warn? |
+| 3 | light | When expiry cleanup runs |
+
+One table per bucket, only the buckets that have rows — what is settled and what
+is still open never share a grid, so each table carries the columns it actually
+needs. Every reconciled row carries its evidence, because that column is the only
+way a wrong "already decided" gets caught.
 
 Meanwhile, as Claude works, choices it makes on your behalf get parked in
 `.qna/<session>.md` so they are still there after a context compaction — and so
