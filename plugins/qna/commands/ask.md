@@ -232,6 +232,24 @@ course of action, not a direction. Give four when four genuinely exist; never
 pad to three, and never trim to three for tidiness. If you can only see one
 option and its negation, you have not thought it through.
 
+**Every heavy question ends with "I don't follow the question".** Three
+substantive options plus that one — exactly what the cap of four allows. It is
+the single option exempt from being a course of action, because what it answers
+is not the subject.
+
+Its preview says what happens if picked: nothing is recorded, and the question
+comes back rewritten. **Picking it is not a non-answer, it is a bug report** —
+R3 failed. So the reply is a rewrite: plainer words, jargon spelled out, a
+concrete scenario in place of the abstraction. Never the same question again
+with the same framing.
+
+A free-text box is always available and always has been — in the side-by-side
+preview layout it renders as `Notes:` rather than a fourth row. But using it
+costs typing, and typing is exactly what this command exists to remove. Someone
+who cannot follow the question should not have to write an essay explaining
+that. Light questions skip this option: they need no background, so failing to
+follow one means it was badly worded, and the box covers that case fine.
+
 **R3 — Options explain themselves.** Any term from earlier in the conversation
 gets one line saying what it is and why it is now in question. The test: could
 someone walking in cold pick from this screen alone?

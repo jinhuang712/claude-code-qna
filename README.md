@@ -188,6 +188,18 @@ worked out where that option leads.
 The question validator is scoped to `/qna:ask` by a self-expiring marker file,
 so ordinary questions elsewhere in your session are untouched.
 
+### When the question is the problem
+
+Every heavy question ends with **"I don't follow the question"** as its fourth
+option. Picking it records nothing and sends the question back rewritten —
+plainer words, jargon spelled out, a concrete scenario instead of the
+abstraction. It is treated as a bug report against the question, not as a
+non-answer, because a question you cannot parse is a failure of the asking.
+
+A free-text box is always there too, and always has been. But using it costs
+typing, and typing is what this command exists to remove: someone who cannot
+follow a question should not have to write an essay saying so.
+
 Nothing works out a path for itself. Every command is injected at session start
 carrying this session's id and this project's absolute path, because the shell
 Claude runs commands in has no `CLAUDE_PROJECT_DIR` and the working directory
