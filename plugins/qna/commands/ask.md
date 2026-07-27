@@ -148,35 +148,24 @@ last few turns right now.
 
 ## 5. Overview
 
-A count, then **one table per bucket** — and only the buckets that have rows —
-then straight into the first question, no confirmation step. What is settled and
-what is still open are different kinds of thing and never share a grid; split
-apart, each table carries the columns it actually needs instead of a generic
-"why". Never a fenced block of aligned monospace text either: it reads as a
-ledger dump and it wraps badly.
+A count, then **two tables** — what needs nothing from the user, and what does —
+then straight into the first question, no confirmation step. One combined table
+is what this replaces: with the queue mixed in, nothing tells the reader at a
+glance which rows are still waiting on them. Never a fenced block of aligned
+monospace text either: it reads as a ledger dump and it wraps badly.
 
 **Scanned 11 — 7 left to ask.**
 
-**Already decided**
+**Not asking · 4**
 
-| Item | Where it landed | Your words |
+| Item | Verdict | Evidence / why |
 |---|---|---|
-| Default TTL | `300`s | "five minutes is fine" |
-| `--no-cache` | shipped | "add the flag" |
+| Default TTL → `300`s | decided | "five minutes is fine" |
+| `--no-cache` shipped | decided | "add the flag" |
+| Cache filename format | moot | backend is SQLite now, there are no filenames |
+| Cache-hit logging → debug | by default | trivial, say so if you disagree |
 
-**No longer applies**
-
-| Item | Why |
-|---|---|
-| Cache filename format | backend is SQLite now, there are no filenames |
-
-**Handled by default** — say so if you disagree
-
-| Item | What I did |
-|---|---|
-| Cache-hit logging | debug level |
-
-**To ask · 7**
+**Yours to settle · 7**
 
 | # | Weight | Question |
 |---|---|---|
@@ -184,9 +173,10 @@ ledger dump and it wraps badly.
 | 2 | heavy | Write failure: degrade silently or warn? |
 | 3 | light | When expiry cleanup runs |
 
-Close with one line inviting corrections. The two reconciled tables always carry
-their evidence column — the user's own words for decided, the reason for moot.
-That column is the only way a wrong call gets caught, so it is never left blank.
+Close with one line inviting corrections. Every row of the first table carries
+its evidence — the user's own words for decided, the reason for moot, why it was
+too trivial to ask for a default. That column is the only way a wrong call gets
+caught, so it is never left blank.
 
 If the session has been compacted, say so above the tables.
 
@@ -259,34 +249,24 @@ when you do, move what would have been in the preview into the descriptions.
 
 Print the decision list and **stop**. No "shall I start?", no edits.
 
-Same shape as the overview: one table per bucket, only the buckets that have
-rows, no monospace ledger.
+Same two-table shape as the overview, no monospace ledger — what is now closed,
+and what is not.
 
-**Decided**
+**Settled · 5**
 
-| Item | Result | Follow-on |
+| Item | Result | Verdict / follow-on |
 |---|---|---|
-| Cache backend | `SQLite` | concurrent writes — enable WAL |
-| Cache key | token fingerprint | cache dir splits per token |
+| Cache backend | `SQLite` | follow-on: concurrent writes, enable WAL |
+| Cache key | token fingerprint | follow-on: cache dir splits per token |
 | Write failure | warn, then degrade | — |
+| Cache-hit logging | debug level | by default |
+| Cache filename format | dropped | moot: backend changed to SQLite |
 
-**Handled by default**
+**Still open · 1**
 
-| Item | What I did |
+| Item | Why it is open |
 |---|---|
-| Cache-hit logging | debug level |
-
-**No longer applies**
-
-| Item | Why |
-|---|---|
-| Cache filename format | backend changed to SQLite |
-
-**Not touched this time**
-
-| Item | Why |
-|---|---|
-| `#9` metrics for cache hit rate | outside the scope you picked |
+| `#9` metrics for cache hit rate | outside the scope you picked, kept in the file |
 
 Then one closing line for what is still open.
 

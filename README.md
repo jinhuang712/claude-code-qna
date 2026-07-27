@@ -44,26 +44,16 @@ leads.
 
 **Scanned 11 — 7 left to ask.**
 
-**Already decided**
+**Not asking · 4**
 
-| Item | Where it landed | Your words |
+| Item | Verdict | Evidence / why |
 |---|---|---|
-| Default TTL | `300`s | "five minutes is fine" |
-| `--no-cache` | shipped | "add the flag" |
+| Default TTL → `300`s | decided | "five minutes is fine" |
+| `--no-cache` shipped | decided | "add the flag" |
+| Cache filename format | moot | backend is SQLite now, there are no filenames |
+| Cache-hit logging → debug | by default | trivial, say so if you disagree |
 
-**No longer applies**
-
-| Item | Why |
-|---|---|
-| Cache filename format | backend is SQLite now, there are no filenames |
-
-**Handled by default** — say so if you disagree
-
-| Item | What I did |
-|---|---|
-| Cache-hit logging | debug level |
-
-**To ask · 7**
+**Yours to settle · 7**
 
 | # | Weight | Question |
 |---|---|---|
@@ -71,10 +61,9 @@ leads.
 | 2 | heavy | Write failure: degrade silently or warn? |
 | 3 | light | When expiry cleanup runs |
 
-One table per bucket, only the buckets that have rows — what is settled and what
-is still open never share a grid, so each table carries the columns it actually
-needs. Every reconciled row carries its evidence, because that column is the only
-way a wrong "already decided" gets caught.
+Two tables, split on the only line that matters while reading: does this row want
+something from you. Every row of the first carries its evidence, because that
+column is the only way a wrong "already decided" gets caught.
 
 Meanwhile, as Claude works, choices it makes on your behalf get parked in
 `.qna/<session>.md` so they are still there after a context compaction — and so
@@ -202,7 +191,7 @@ moves — and a marker written to the wrong place is indistinguishable from no
 marker at all, which reads as "not inside `/qna:ask`" and lets every question
 through unchecked.
 
-`tests/smoke.sh` asserts all of it: 50 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 51 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ## Deliberately not doing

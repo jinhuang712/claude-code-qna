@@ -134,23 +134,15 @@ else
   pass "no section-sign character in the docs"
 fi
 
-# One table per bucket. A generic "bucket / 归属" column means decided and
-# still-open were merged back into a single grid.
-lumped=$(grep -l -e '^| Bucket ' -e '^| 归属 ' \
+# The queue gets its own table. A row of questions under the same header as the
+# reconciled items means the two were merged back into one grid.
+lumped=$(grep -l -e '^| Bucket | Item ' -e '^| 归属 | 条目 ' \
   "$DOCS/plugins/qna/commands/ask.md" "$DOCS/specs/design.md" "$DOCS/README.md" 2>/dev/null || true)
 if [ -n "$lumped" ]; then
-  fail "no combined bucket table in the docs" "still in: $lumped"
+  fail "queue is not merged into the reconciled table" "combined header still in: $lumped"
 else
-  pass "no combined bucket table in the docs"
+  pass "queue is not merged into the reconciled table"
 fi
-
-for want in '^\*\*Already decided\*\*' '^\*\*To ask' '^| # | Weight | Question |'; do
-  if grep -q -- "$want" "$DOCS/plugins/qna/commands/ask.md"; then
-    pass "ask.md keeps a split table: $want"
-  else
-    fail "ask.md keeps a split table: $want" "missing"
-  fi
-done
 
 # ---------------------------------------------------------------- SessionStart
 printf '=== SessionStart\n'
