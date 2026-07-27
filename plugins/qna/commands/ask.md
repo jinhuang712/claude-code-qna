@@ -1,6 +1,6 @@
 ---
 name: ask
-description: So what do I actually need to decide? Turn every open point into a clickable question.
+description: So what do I actually need to decide?
 disable-model-invocation: true
 argument-hint: [optional: limit to one topic, e.g. "architecture"]
 ---
@@ -94,13 +94,15 @@ survivor through `QNA_ADD` with `--found-by-scan` appended** — one call each, 
 anything not already in the file.
 
 That is not bookkeeping, it is the filter. Judging alternatives, cost and
-surprise in your head is exactly the check that drifts; `qna-add` refuses an
-entry you cannot name two real alternatives for, or whose `--where` does not
-resolve to a real `file:line` or words actually said. **A refusal is the
-answer** — that item was not a decision, so drop it and do not work around it.
-Without this, the conversational half of the scan is the one path with no script
-behind it, and filtering only the half that already has a hard gate is worse than
-not filtering.
+surprise in your head is exactly the check that drifts. Without this, the
+conversational half of the scan is the one path with no script behind it, and
+filtering only the half that already has a hard gate is worse than not filtering.
+
+**The two refusals mean different things.** Refused over `--alt` is the answer:
+the item was an implementation detail, so drop it and do not work around it.
+Refused over `--where` is not — the citation failed, the item did not. Point at
+the `file:line` the decision shows up in, or quote the user verbatim, and run it
+again. Treating the second as the first throws away real decisions silently.
 
 `--found-by-scan` marks the provenance and is not optional. An entry recorded as
 the choice was made carries alternatives that were genuinely weighed; one

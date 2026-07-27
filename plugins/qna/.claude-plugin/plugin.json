@@ -1,8 +1,8 @@
 {
   "name": "qna",
   "displayName": "qna",
-  "version": "0.12.0",
-  "description": "Turn everything still undecided in a conversation into clickable questions.",
+  "version": "0.12.1",
+  "description": "Turns open decisions into clickable questions.",
   "author": {
     "name": "jinhuang712"
   },
