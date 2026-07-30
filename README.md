@@ -39,8 +39,8 @@ it didn't fit".**
 
 `/qna:ask` reads the conversation and a small per-session log, works out what is
 genuinely still open, and puts it to you as clickable questions — batched, in
-dependency order, each with real alternatives and a preview of where each one
-leads.
+dependency order, each with real alternatives and, wherever the difference is
+something you can look at, a preview of where each one leads.
 
 **Scanned 11 — 7 left to ask.**
 
@@ -124,10 +124,13 @@ bash reinstall.sh --local      # force working tree
                                        |
   ==========  you run /qna:ask  ========|=================
                                        |
-                    read file <--------+
+                    qna-list <---------+   open entries only
                         |
                     qna-scan  <-- transcript, minus 97% tool traffic
-                        |           starting after the last scan
+                        |           after the last scan, and only the
+                        |           turns behind a context compaction
+                        |           (nothing to print is the usual case:
+                        |            the rest is still in Claude's context)
                         v
                      filter --> qna-add --found-by-scan
                         |          |   same refusals as above:
@@ -148,7 +151,8 @@ bash reinstall.sh --local      # force working tree
                         |               |  PreToolUse validator
                         |               +--- under 3 options    -> denied
                         |               |    (multi-select: 2)
-                        |               +--- no preview         -> denied
+                        |               +--- panel half-filled  -> denied
+                        |               +--- panel empty        -> denied
                         |               +--- payload unparsed   -> denied
                         v
                   decision list --> write the answers back
@@ -156,7 +160,13 @@ bash reinstall.sh --local      # force working tree
                         |
                         +-> new opens from R6 --> qna-add
                         |
-              qna-scan --mark                next scan starts here
+                     clean up   the only step that removes anything
+                        |
+                        +-> you decided it      --> qna-resolve  (--quote)
+                        +-> nobody ever will    --> qna-drop     (why required)
+                        +-> outside the scope gate  --> left alone
+                        |
+                     qna-prune   takes every closed entry out at once
 
   ============  around each turn  ============
        your prompt --> nothing ever recorded?  -> re-surface the protocol,
@@ -185,9 +195,13 @@ of instruction a model drifts away from, so neither is left as an instruction.
 | At least two alternatives per entry — including the ones the scan finds, which go through the same `qna-add` | Whether something counts as a decision |
 | `--where` resolves to a real file:line **or** words actually said in the conversation | Whether the conversation has settled it |
 | Archiving requires quoting the user | |
+| Discarding an item nobody will rule on requires one of two reasons and a written why | |
+| The pending file itself — reading, closing and removing all go through scripts, and the file tools are refused on `.qna/` | |
 | Three to four options per question — two is enough for a multi-select, where two boxes answer neither/A/B/both | |
-| Every single-select option has a preview | |
-| A payload that failed to parse is refused rather than waved through unchecked | |
+| The panel behind an option is never empty and never half-filled — a preview to look at or a description to read, the same way for every option | Which of the two a given question wants |
+| A payload that failed to parse is refused rather than waved through unchecked, with its size named | |
+| A recommendation is moved to the top of the list, and a preview a multi-select would never render is dropped — both in place, before the question is shown | Whether there is a recommendation to make at all |
+| An over-long preview, previews that add up past what the payload survives, and a second small question minutes after the last one all come back as a note beside the result — allowed, never blocked | What to do about the note |
 | Where files land — every path is injected, never worked out by the model | |
 | Which stretch of conversation is unscanned — the watermark is read and written by `qna-scan`, never reasoned about | |
 
@@ -200,21 +214,36 @@ decision. Do not record it.
 ```
 
 ```
-Refused: every single-select option needs a preview showing what actually
-happens if it is chosen. If you cannot think of what to show, you have not
-worked out where that option leads.
+Refused: these options say nothing beyond their own label. With no preview and
+a description no longer than the label, the reader is choosing from a handful
+of characters. Do not invent a preview for an option its label already settles
+— write the description instead.
 ```
 
 **The validator runs on every question, in every session** — not just inside
 `/qna:ask`. It used to be scoped to the command by a marker file, on the
 reasoning that these rules suit settling a backlog and are needlessly rigid for
-ordinary conversation. Then a real session supplied the comparison: 49 questions
-asked outside the command, and the 3 single-selects among them had no preview
-between them. `/qna:ask` runs a few times a day; ordinary questions run dozens
-of times. Enforcing only in the rarest place had it backwards.
+ordinary conversation. Then the transcripts supplied the comparison: over three
+weeks, 7 questions were refused for having fewer than three options and 6 of
+them were asked outside the command. `/qna:ask` runs a few times a day; ordinary
+questions run dozens of times. Enforcing only in the rarest place had it
+backwards.
 
 The cost is real: a question that genuinely has two courses of action and no
 third now has to find one.
+
+What it asks about previews moved once, and the numbers are why. The first
+version wanted one on every single-select option. It worked — coverage over
+those three weeks went from 11% of questions before the hook was installed to
+89% after — but it refused 59% of everything asked, and a refusal is a full
+round trip on a tool that is already slow. It also pushed the model into
+inventing artifacts: one refusal produced three `git branch` outputs differing
+only in where the asterisk sat, for a question whose options were three branch
+names. So the demand moved to the harm: a preview and a description are the same
+panel, and what is refused now is leaving that panel empty, or filling it for
+some options and not others. Replaying all 1034 questions from those three weeks
+through the validator, the panel rule refuses 2.7% where the old one refused
+31.6%.
 
 ### When the question is the problem
 
@@ -234,7 +263,7 @@ Claude runs commands in has no `CLAUDE_PROJECT_DIR` and the working directory
 moves — and a file written to the wrong place fails without failing: the pending
 list silently reads as empty, and the scan silently re-reads the whole session.
 
-`tests/smoke.sh` asserts all of it: 92 cases, no dependencies, temp directory,
+`tests/smoke.sh` asserts all of it: 170 cases, no dependencies, temp directory,
 quiet unless something fails.
 
 ### Reading the conversation without reading the transcript
@@ -244,7 +273,7 @@ conversation. Measured on the session that built this feature: **2916.7 KB
 total, of which 97% is tool calls, tool results, thinking and metadata.** The
 actual back-and-forth was 97 KB.
 
-So `qna-scan` does two things, both in code rather than judgement:
+So `qna-scan` does three things, all in code rather than judgement:
 
 - **Filters** to user messages and Claude's own prose. That alone is the
   difference between a file too large to open and one that fits in a scan.
@@ -252,11 +281,24 @@ So `qna-scan` does two things, both in code rather than judgement:
   the timestamp as fallback. A second run in a long session reads only what is
   new; if neither anchor resolves it re-reads everything rather than guessing a
   boundary, because over-reading is merely slower and under-reading is silent.
+- **Cuts at the newest context compaction** and prints only what is behind it.
+  Everything after that point is still verbatim in Claude's context, so reading
+  it off disk would buy a second copy of what Claude is already looking at — paid
+  for on that turn and then on every request for the rest of the session.
 
-The watermark advances as the last action of `/qna:ask`, not the first. An
-interrupted run therefore re-reads that stretch instead of skipping it. And when
-the window crosses a context compaction, the scan says so — detail from before
-that point survives only as a summary.
+That third one means **an empty scan is the ordinary result**, not a failure: a
+session that has not compacted has nothing on disk Claude cannot already reach,
+and the scan says so and hands the stretch back by count. The output caps at
+30 KB, and names how many turns it dropped when it gets there.
+
+The watermark advances as soon as the survivors are recorded, before Claude asks
+you anything. Marking last read as the safer order — an interrupted run would
+re-read rather than skip — but it put the watermark past the very turns your
+answers were given in, and a run that never reached the end left it unset
+entirely. This project managed eight `/qna:ask` invocations in one session
+without ever marking; all eight re-read from the first turn, and the eighth
+printed 139 KB. Recording is what makes a stretch durable, so marking follows it
+directly.
 
 ## Deliberately not doing
 

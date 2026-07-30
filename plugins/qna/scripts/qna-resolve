@@ -15,7 +15,6 @@ them the decision. So: no quote, no archive.
 
 import argparse
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -51,30 +50,12 @@ def main():
         print(f"Refused: #{args.id} is already resolved.", file=sys.stderr)
         return 1
 
-    lines = open(path, encoding="utf-8").read().split("\n")
-    out = []
-    inside = False
-    head_re = re.compile(rf"^- \[ \] #{args.id} · ")
-    for line in lines:
-        if head_re.match(line):
-            out.append(line.replace("- [ ] ", "- [x] ", 1))
-            inside = True
-            continue
-        # Insert straight after the last field line, before the blank
-        # separator, so the result stays visually attached to its entry.
-        if inside and not line.startswith("  - "):
-            out.append(f"  - Result: {args.result}")
-            out.append(f"  - Quote: {args.quote}")
-            inside = False
-        out.append(line)
-    if inside:
-        out.append(f"  - Result: {args.result}")
-        out.append(f"  - Quote: {args.quote}")
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(out))
-
-    print(f"Resolved #{args.id}.")
+    # Result and Quote land straight after the last field line, so what was
+    # decided stays visually attached to the entry it settles.
+    qna_lib.close_entry(
+        path, args.id, [("Result", args.result), ("Quote", args.quote)]
+    )
+    print(f"Resolved #{args.id}. qna-prune clears it from the file.")
     return 0
 
 

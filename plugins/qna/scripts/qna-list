@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Print what is parked. The only sanctioned way to read the pending file.
+
+    qna-list --session <id> [--project <dir>] [--all] [--raw]
+
+Reading used to be a Read on an injected path, which made the file's internals
+part of the interface: closed entries sat in it carrying Result and Quote lines
+that were nobody's business any more, and every reader had to know to skip a
+"- [x]" for itself. One reader that forgets is one question put to the user twice.
+
+So the queue is what this prints, and closed entries are filtered here. --all
+shows them when the history is the point, --raw dumps the bytes for when
+something has gone wrong with the file itself.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--all", action="store_true", help="include closed entries")
+    ap.add_argument("--raw", action="store_true", help="dump the file verbatim")
+    args = ap.parse_args()
+
+    path = qna_lib.pending_path(args.session, args.project, create=False)
+    if not os.path.exists(path):
+        print(
+            f"Nothing parked in session {args.session}. "
+            f"The conversation is your only source."
+        )
+        return 0
+
+    if args.raw:
+        sys.stdout.write(open(path, encoding="utf-8").read())
+        return 0
+
+    _, blocks = qna_lib.read_blocks(path)
+    shown = blocks if args.all else [b for b in blocks if not b["done"]]
+    closed = len([b for b in blocks if b["done"]])
+
+    if not shown:
+        print(
+            f"Nothing open in session {args.session}"
+            + (f" ({closed} closed, awaiting qna-prune)." if closed else ".")
+        )
+        return 0
+
+    head = f"{len([b for b in shown if not b['done']])} open in session {args.session}"
+    if args.all:
+        head += f", {closed} closed"
+    elif closed:
+        head += f" ({closed} closed and hidden — qna-prune clears them)"
+    print(head)
+    for b in shown:
+        print()
+        print("\n".join(b["lines"]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Discard a parked item the user never ruled on.
+
+    qna-drop <id> --session <id> --reason moot|trivia --why "..."
+
+qna-resolve closes what the user settled and demands their words for it. This
+closes the other kind: an item nobody will ever rule on, because its premise is
+gone or because it should never have been recorded. Those two need a way out —
+leaving them in means every /qna:ask re-reads the same noise and, worse, risks
+putting it back in front of the user as a question.
+
+The way out is deliberately narrow. Two reasons, both requiring a written why,
+and the two neighbouring reasons a caller reaches for by mistake are refused by
+name: "settled" belongs to qna-resolve, and an item skipped by the scope gate is
+one the user has not ruled on yet, so it stays.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+REASONS = {
+    "moot": "the premise is gone, so there is nothing left to decide",
+    "trivia": "it failed the importance bar and would resurface every run",
+}
+
+REDIRECT = {
+    "settled": (
+        "Refused: --reason settled belongs to qna-resolve, which wants the "
+        "user's own words for it. Dropping a settled item here would record "
+        "that it closed without recording what it closed as."
+    ),
+    "out-of-scope": (
+        "Refused: an item left out by the scope gate is one the user has not "
+        "ruled on. It stays in the queue for the next /qna:ask. Only a premise "
+        "that is gone (moot) or an entry that should never have been recorded "
+        "(trivia) gets dropped."
+    ),
+}
+
+
+def refuse(msg):
+    print(msg, file=sys.stderr)
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("id", type=int)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--reason", required=True)
+    ap.add_argument("--why", required=True)
+    args = ap.parse_args()
+
+    reason = args.reason.strip().lower()
+    if reason in REDIRECT:
+        return refuse(REDIRECT[reason])
+    if reason not in REASONS:
+        return refuse(
+            f"Refused: --reason {args.reason} is not one of "
+            f"{' | '.join(REASONS)}. If neither fits, the item is still open."
+        )
+    if not args.why.strip():
+        return refuse(
+            "Refused: no --why. Dropping something the user never saw is the one "
+            "operation here nobody can review, so it does not happen silently — "
+            f"say why it is {reason} in one line."
+        )
+
+    path = qna_lib.pending_path(args.session, args.project, create=False)
+    entries = qna_lib.read_entries(path)
+    match = next((e for e in entries if e["id"] == args.id), None)
+    if match is None:
+        ids = ", ".join(f"#{e['id']}" for e in entries if not e["done"]) or "none"
+        return refuse(f"Refused: no entry #{args.id}. Currently open: {ids}")
+    if match["done"]:
+        return refuse(f"Refused: #{args.id} is already closed.")
+
+    qna_lib.close_entry(
+        path, args.id, [("Dropped", f"{reason} — {args.why.strip()}")]
+    )
+    print(f"Dropped #{args.id} ({reason}). qna-prune clears it from the file.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

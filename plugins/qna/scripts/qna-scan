@@ -4,7 +4,7 @@
     qna-scan --session <id> --project <abs> --transcript <abs>
     qna-scan --session <id> --project <abs> --transcript <abs> --mark
 
-Two jobs, both of which have to be a script rather than a judgement call:
+Three jobs, all of which have to be a script rather than a judgement call:
 
   * Filter.  A working session's transcript is mostly tool calls, tool results
     and thinking — 97% of the bytes in the session that prompted this script.
@@ -16,10 +16,20 @@ Two jobs, both of which have to be a script rather than a judgement call:
     than the first. The model never computes the boundary and never sees a
     timestamp it has to reason about: it runs this, it reads what comes back.
 
---mark advances the watermark, and is the last thing /qna:ask does. Advancing
-it earlier would mean an interrupted run silently skipped a stretch of
-conversation on the next pass, which is the expensive kind of failure: nothing
-reports it and the material is simply never looked at again.
+  * Compaction cut.  Of what is left, print only the turns behind the newest
+    compact summary. Everything after it sits verbatim in the model's context,
+    so printing it is a second copy of what the model is already reading — paid
+    for once here and then again on every request for the rest of the session.
+    The frequent outcome is therefore an empty window, and that is the tool
+    working: it means the context scan has the stretch covered.
+
+--mark advances the watermark, and /qna:ask runs it as soon as the survivors are
+recorded — not at the end. Marking last looked safer, on the reasoning that an
+interrupted run should re-read rather than skip. In practice it swallowed the
+turns the user's answers were given in, and a run that never reached the end left
+the watermark unset entirely: eight invocations in one session, all eight reading
+from the first turn, the last of them printing 139 KB. Recording is what makes
+the stretch durable, so marking belongs immediately after it.
 
 Resume is by uuid, with the timestamp as fallback. A uuid is exact; timestamps
 repeat and clocks move. If neither resolves, the whole conversation is printed
@@ -49,10 +59,19 @@ except (AttributeError, ValueError):
 EXIT_OK = 0
 EXIT_UNREADABLE = 2
 
-# Enough for a long day of conversation, small enough to stay affordable. On
-# overflow the newest text is kept and the drop is reported: a cap that stays
+# Priced, not guessed. Output lands in the model's context and is re-sent with
+# every request for the rest of the session, so this cap is a per-session
+# multiplier rather than a one-off, and one real session paid it eight times over.
+#
+# The unit is characters, and what that costs in tokens depends on the language:
+# English prose runs about 4 chars per token, Chinese closer to 1. So 30_000 is
+# roughly 7k tokens of English and up to 30k of Chinese — the old 200_000 was 50k
+# and 200k respectively, the latter being the entire context window. Budget
+# against the pessimistic end; a transcript's language is not ours to predict.
+#
+# On overflow the newest text is kept and the drop is reported: a cap that stays
 # quiet reads as "you have seen everything".
-MAX_CHARS = 200_000
+MAX_CHARS = 30_000
 
 
 def resolve_window(turns, mark_uuid, mark_ts):
@@ -66,6 +85,26 @@ def resolve_window(turns, mark_uuid, mark_ts):
         if len(after) != len(turns):
             return after, "timestamp"
     return turns, "everything"
+
+
+def split_at_last_compaction(window):
+    """Turns the model can no longer see, and how many it still can.
+
+    A compact summary entry replaces everything before it, so from that entry
+    onward the window sits verbatim in context and printing it off disk buys
+    nothing — it pays full price for a second copy of what the model is already
+    reading. Only the stretch before the newest summary is genuinely out of
+    reach, and that stretch is the entire reason to touch the transcript.
+
+    The summary entry itself is in context too, hence the cut lands on its index
+    rather than after it. Multiple compactions: the newest one wins, because
+    each supersedes the last.
+    """
+    cut = 0
+    for i, t in enumerate(window):
+        if t["compacted"]:
+            cut = i
+    return window[:cut], len(window) - cut
 
 
 def render(turns):
@@ -118,6 +157,15 @@ def main():
               "is the only source this run.".format(meta.get("scan_ts")))
         return EXIT_OK
 
+    window, in_context = split_at_last_compaction(window)
+
+    if not window:
+        print("qna-scan: {} turns in the window, none of them behind a "
+              "compaction — every one is still verbatim in your context. Scan "
+              "it there; the transcript has nothing to add this run."
+              .format(in_context))
+        return EXIT_OK
+
     body = render(window)
     dropped = 0
     if len(body) > MAX_CHARS:
@@ -135,13 +183,18 @@ def main():
         window = keep
 
     head = ["qna-scan · {} turns · {:.1f} KB".format(len(window), len(body) / 1024)]
+    # Every turn printed is now, by construction, behind a compaction. That is
+    # not a caveat on the output, it is what the output is for: these are the
+    # only turns your context does not hold, so what follows is the record.
+    head.append("all of these are behind a context compaction — they reach you "
+                "only as a summary, so treat what follows as the record")
+    if in_context:
+        head.append("{} newer turns not printed: still verbatim in your context, "
+                    "scan them there".format(in_context))
     if how == "everything":
-        head.append("no watermark yet — this is the whole conversation")
+        head.append("no watermark yet — this reaches back to the first turn")
     else:
         head.append("window since {} (resumed by {})".format(meta.get("scan_ts"), how))
-    if any(t["compacted"] for t in window):
-        head.append("this window crosses a context compaction; the summary entry "
-                    "below is condensed, not verbatim")
     if dropped:
         head.append("{} older turns dropped to stay under {} KB — they were NOT "
                     "scanned".format(dropped, MAX_CHARS // 1024))

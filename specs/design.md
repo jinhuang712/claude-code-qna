@@ -2,7 +2,9 @@
 
 状态：v1 已定稿并实装，无待审项。最后一次与实装对账 2026-07-27 16:42:05（北京时间，下同）。
 
-代码侧的机械保证由 `tests/smoke.sh` 逐条断言（120 条）：选项下限与上限、preview 必填、`--where` 必须落到真实 file:line 或原话、归档必须带原话、四条命令的路径全注入、marker 的生效范围与自然过期、目录懒建。prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
+代码侧的机械保证由 `tests/smoke.sh` 逐条断言（185 条）：选项下限与上限、选项背后的面板不空也不半填、`--where` 必须落到真实 file:line 或原话、归档必须带原话、丢弃必须给理由、`.qna/` 只能经脚本读写、注入命令的路径全带上、目录懒建。
+
+prompt 侧（R3 / R5 / R6 / R7、五类来源的召回、对账判断）无法脚本化，只能在真实会话里验。
 
 **两条召回路径，同一个硬闸。** 记录侧在决策发生的当下经 `qna-add` 落盘；扫描侧在 `/qna:ask` 时把过滤后的存活项**同样经 `qna-add` 落盘**（带 `--found-by-scan`）。于是「备选 / 代价 / 意外」这三道过滤在两侧都由脚本兜底，拒绝即答案。两侧唯一的差别写在 `Source` 字段里：`agent` 的备选是当时真比较过的，`scan` 的是事后补的——同一条门槛，不同的成色，文件里分得清。
 
@@ -36,25 +38,84 @@ G1.3 / G1.4 / G1.5 **同源**，根因都是"装不下就退回文本墙"，一�
 | G2.4 | 结构性差异看得见实物 | 你只能用"太简略了"这种形容词表达不满 | R4 |
 | G2.5 | 一次只装载一个问题的上下文 | 一屏里塞三个互不相关的重决策 | R5 |
 | G2.6 | 答案天然可多选时，一次勾完 | 被迫拆成连串"要不要 A / 要不要 B"；或只能选一个，再走 Other 打字补充 | D13 例外条款 |
-| G2.7 | 长内容有地方放——细节下沉到右侧 `preview` 面板 | 为压缩解释而**丢信息**；或为保信息把题干撑成一面墙 | R4 + R5 联合 |
+| G2.7 | 长内容有地方放——细节下沉到右侧面板 | 为压缩解释而**丢信息**；或为保信息把题干撑成一面墙 | R4 与 R5 分账 |
+| G2.8 | 有倾向时一眼看见推荐项 | 三个选项摆成等价让你自己权衡一轮，而我心里其实早有答案 | R2 推荐标记 |
 
 G2.6 有两重作用，不只是便利：拆成连串"要不要"就是**批量生产是非题**（撞 R2）；只能单选再打字补充就**破了零打字**（撞 G1.1）。所以 D13 的「默认 single-select」必须带一个真实可用的例外口，不能写死。
 
-G2.7 是 R5 能成立的前提。R5 要求"解释 ≤150 字"——**若没有 `preview` 承接，那就是删信息，不是挪信息**。preview 是细节的去处：想看的在右侧，不想看的不占屏幕。这也直接支撑 G1.2（题干与选项同屏）：屏幕之所以够用，是因为长内容被移到了旁边而不是被砍掉。
+### 一道题的四个象限
 
-**R4 已扩面（已采纳）：所有题默认带 `preview`。**
+`AskUserQuestion` 给了五个可写的位置。它们不是详略五档，而是按两个维度切出来的四格——**信息放错格，读者就得多做一个动作**：滚回去、逐个聚焦对比，或者干脆问你这题什么意思。
 
-- 格式 / 结构 / 配置 / 数据类问题：**必须**用 preview 并排展示实物
-- 其余所有题（重头题与顺手题一律）：**默认**带 preview，承接被 R5 挤出解释的细节
-- **没有豁免口。** 单选题一律必须带 preview，由 `PreToolUse` 机械校验
+| | 共享（整道题） | 独有（单个选项） |
+|---|---|---|
+| **常驻可见** | R5 的解释 · `question`：前提、为什么现在定、拍错会怎样 | `label`：约 11 字符，用来扫，读者此刻做的事是**排除** |
+| **聚焦才见** | 空。也不该有 | `description`（读）· `preview`（看） |
 
-**"没东西可放"不是一种情况，是一个信号。** 任何选项都至少有"选了会得到什么"可展示——实物、后果、演变、对比、场景实例。如果你想不出往 preview 里放什么，那不是这道题不需要 preview，是**你还没把这个选项的后果想清楚**。与 `--alt` 同理：编不出替代项说明它不是决策，编不出 preview 说明你没想清楚选项。
+**「共享 + 聚焦」那格空着，是设计错误的检测器。** 任何被重复写进每个选项的内容都落在这一格：读者聚焦三次读了三遍同一件事，仍拼不出这道题为什么成立。R5 那次实测代价正是这格被误用——12 道题细节全挤进 `description` 和 `preview`，共享前提无处容身，用户的评价是"非常难回答"。
 
-**内容要求（prompt 层，防填充）**：preview 必须展示选了之后**实际会发生什么**，不得复述选项标签。「选项 A：方案 A」这种是填充，等同于没写。非代码类问题同样有东西可放——本设计文档里这道 hook 校验题就是例子，三个选项分别放了校验项清单、风险实例、预期演变。
+**「独有 + 聚焦」是同一个面板的两个抽屉。** `preview` 与 `description` 渲染在同一个位置，跟随当前聚焦的那个选项，一个供看一个供读。填哪个是判断，**两个都空不是**——那时读者手上只剩 label 的十来个字符。这条是 hook 现在唯一还管的与内容有关的东西。
 
-分工照旧：**存在性由 hook 机械保证，内容质量由 prompt 约束。**
+不撞 G1.2：面板跟随**当前聚焦的那一个选项**渲染，不是多个堆叠；一批 4 题也逐题聚焦作答，屏幕上始终只有一题一面板。
 
-不撞 G1.2：`preview` 跟随**当前聚焦的那一个选项**渲染在右侧，不是多个面板堆叠；一批 4 题也是逐题聚焦作答，屏幕上始终只有一题一面板。
+### R4：preview 是差分器
+
+面板在同一个位置随焦点切换而换内容，**人眼对"固定位置上的变化"极其敏感**——这是 preview 唯一强过 description 的地方。于是它的收益不在实物本身，在**切焦点时变化的那部分**：
+
+```
+分支名 · restart / v2 / blank-slate
+  三段 git branch 输出、633 字符，选项之间唯一移动的是那个星号。
+  label 早就把话说完了。这条是为满足规则编出来的。
+
+HTML 产物 · 收进 html/ / 删掉 / 继续平铺
+  同一个目录的三种未来，带真实体积和一条不可逆警告。读完这个面板，题就答完了。
+```
+
+四条做法从这个身份直接推出，没有一条是口味：
+
+| 做法 | 为什么 |
+|---|---|
+| 同一道题里所有 preview 同构 | 不同构就没法比，面板退化成三段更占地方的 description |
+| 变化的部分落在同一位置 | 同构的强化版：同一行开头，差异出现在它下面 |
+| 不变的部分要短 | 那是对齐用的锚，不承载信息，而每一行都要被读三遍 |
+| 不放需要顺序读的长句 | 那是 `description` 的活 |
+
+**长度**：单条约 300 字符（实测 p90 = 319）。一道题的 previews 合计过千，payload 就开始解析失败，而这几乎总是原因所在。
+
+**label 已经说完的题，写透 `description`，不要编 preview。** 这条规则从前写着"没东西可放不是一种情况，是一个信号"——那句话正是三段 `git branch` 的来源。差异只是一个名字、一个开关、一条路径的选项，需要的是一句"选它意味着什么"，不是一件为填面板而造的实物。
+
+**同一道题的面板要么全填要么全不填。** 一半有一半没有，焦点移动时面板忽有忽无，比全都没有更糟：它破坏的正是面板存在的唯一理由。
+
+### G2.7 改述：解释与 preview 分账，不是叠加
+
+读者为一道题付出的阅读量大约一屏。R5 的解释买的是「共享 + 常驻」，面板买的是「独有 + 聚焦」，两者**竞争同一份注意力预算**。
+
+这否定了本节从前的写法——G2.7 曾被记成"R4 + R5 联合"。真实关系是分账：
+
+```
+题目本身复杂（前提要交代）   -> 预算给 R5 的解释
+选项差异复杂（结果要看见）   -> 预算给面板
+两边都想写长                 -> 这是「题太大」的信号，不是「该写更多字」
+                                拆成两道：先定方向，再定具体
+```
+
+R5 要求"解释 ≤150 字"仍然成立，因为细节确实有去处——只是去处有两个（`preview` 和 `description`），不是一个。
+
+### R2 的推荐标记（G2.8）
+
+**标记推荐项，把问题从"你来想"降级成"你来否决"。** 用户读到推荐项和它的理由后只需判断同不同意，这比从三个里挑一个轻一个量级；另外两个选项的存在保证否决有出口——**他在选择，不是在批准**。理由写进推荐项自己的 `description`，不写进 label。
+
+规则是双向的：
+
+```
+有倾向  ->  必须标，必须排第一位
+没倾向  ->  一个都不标
+中间态  ->  最差：心里有答案却摆成三个等价选项，白让用户权衡一轮
+```
+
+**答案属于用户的题不标推荐**——起什么名、先做哪个、两种都能接受的风格里挑一个。那里你没有推荐的立场，标了就是一边装作在问一边替他定了。
+
+**这条约定早就在跑，只是从没被写下来。** 三周的 transcript 里 414 / 1034 道题带推荐标记，其中 408 次排在第一位（98%）。写进 R2 是把既成事实固定住，不是新加负担。
 
 G2.3 是**唯一一条不由提问规则承担、而由记录机制承担的目标**。选项的真实性没法在提问时凭空造出来，只能在决策发生的当下存下来——这是 `qna-add` 存在的根本理由，也是它必须进 v1 的原因。
 
@@ -135,20 +196,22 @@ G6.3 原文是"输出永不自称完整，措辞只能是'扫到的'"——不�
 
 ## 三之二 · 单选与多选
 
-**默认 single-select。** 这不是权宜，是让 `preview` 恒可用的前提：`preview` 只对 single-select 生效，而 R4 要求所有题默认带 preview。选单选，两条规则同时成立。
+**默认 single-select。** 这不是权宜，是让面板恒可用的前提：`preview` 只对 single-select 渲染，而「独有 + 聚焦」那一格是选项细节唯一的去处。选单选，两个抽屉都在。
 
-**`multiSelect` 只用于答案天然可多选的题**——「这几条里哪些其实还没定」「要加哪些字段」这类问"勾哪几个"的题。用它就等于放弃 preview，因此附带两条补偿义务：
+**`multiSelect` 只用于答案天然可多选的题**——「这几条里哪些其实还没定」「要加哪些字段」这类问"勾哪几个"的题。用它就等于关掉 `preview` 抽屉，因此附带两条补偿义务：
 
 1. 本该进 preview 的细节，全部压进各选项的 `description`
 2. 题干写得比单选题更完整——没有右侧面板兜底
 
-**禁止为省事把一组单选方案题塞成多选。** 那是白白放弃 preview，没有任何收益。
+**多选题里写 `preview` 是白写**，工具根本不渲染它。三周的 transcript 里有 3 个多选选项写了 preview，那些字符从未出现在任何人的屏幕上。
+
+**选型判据：差异需要"看"的题，不该做成多选。** 为省一道题而放弃面板，是把一次比较拍扁成一张勾选清单。实践中这两个需求很少撞车——选项是几套对立方案的题天然单选，而真正"勾哪几个"的题，选项之间差的就是个名字，本来也不需要面板。
 
 **多选的选项下限是 2，不是 3。** R2 的下限 3 是为了拦是非题伪装，而两个复选框不是是非题——它有四种答案：都不要 / 只要 A / 只要 B / 都要。把多选也按 3 卡，直接把 G2.6 顶死：「要加哪些字段」这类题经常正好只有两个候选，拒了它就等于逼着退回成一串「要不要 A」「要不要 B」——正是多选存在的理由。
 
 **实测踩到过**：某会话里「两个契约新增字段要哪些？」带 `tag_ids` / `reviews[].language` 两个候选，是一道完全正当的多选题。当时它被放行了，因为校验器还只在 `/qna:ask` 内生效而那个会话没跑过命令；按当时的规则它本该被拒，理由还会是「2 options is a yes/no question in disguise」——对一道多选题来说这个诊断是错的。
 
-实践中这两个需求很少落在同一道题上：需要 preview 的是方案对比题，而方案对比题天然单选；天然多选的题选项一行一个，本就不需要并排展示实物。
+**`preview` 只对 single-select 渲染这条工具限制，恰好和上面那条判据同向**——它不是把设计逼到墙角的约束，而是替设计做了一半的分类。
 
 ---
 
@@ -226,6 +289,29 @@ qna-resolve <id>  --session <id> --project <abs>
     已归档过             拒绝
     通过                 标 [x] 并追加 Result / Quote 行，回 "Resolved #4."
 
+
+qna-drop    <id> --session <id> --project <abs>
+                 --reason moot|trivia  --why <一句话>
+
+    --reason settled        拒绝并指向 qna-resolve（那条要用户原话）
+    --reason out-of-scope   拒绝：范围闸门漏掉的条目用户没拍板，留在队列里
+    --reason 不在枚举内     拒绝并列出两个合法值
+    --why 空                拒绝
+    通过                    标 [x] 并追加 Dropped: <reason> — <why>
+
+
+qna-prune   --session <id> --project <abs>  [--dry-run]
+
+    无已关闭条目   回 "Nothing closed to prune. N still open."
+    有             整段删掉所有 [x] 条目，回 "Pruned #2, #3. N still open."
+    删空           连 .md 一起删；.meta 留着（水位线/扫描位不能跟着丢）
+
+
+qna-list    --session <id> --project <abs>  [--all] [--raw]
+
+    默认      只打开着的条目，全文；末尾提一句藏了几条已关闭的
+    --all     连已关闭的一起打
+    --raw     原文倒出（拒绝文案里给的兜底口子）
 
 
 qna-scan    --session <id> --project <abs> --transcript <abs>  [--mark]
@@ -320,19 +406,71 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
     多选 options < 2     → deny  "Refused: 1 option is not something to
                                   choose between."
     options > 4          → deny  "Refused: tool caps options at 4."
-    单选且无 preview     → deny  "Refused: every single-select question
-                                  needs a preview. If you cannot think of
-                                  what to show, you have not worked out
-                                  what each option actually leads to."
+    单选面板半填         → deny  "Refused: filled for some options and
+    (有的有 preview               empty for others. It renders for
+     有的没有)                    whichever option has focus, so a
+                                  half-filled set makes it blink."
+    单选面板两格全空     → deny  "Refused: these options say nothing
+    (无 preview 且有选项          beyond their own label. Fill one of
+     description 不长于 label)    the two — do not invent a preview for
+                                  an option its label already settles."
+
+    ── 以下不阻断，只挂一句话在 tool result 旁边（见「反馈的三个档位」）──
+
+    推荐项不在第一位     → updatedInput 重排 + 说明
+    多选里写了 preview   → updatedInput 删掉 + 说明
+    单条 preview > 400   → additionalContext
+    previews 合计 > 1000 → additionalContext
+    5 分钟内第二次小提问 → additionalContext
 ```
 
 `deny` 的 `permissionDecisionReason` 直接回给模型，和 `qna-add` 的拒绝文案同一套路数：**拒绝本身就是答案**。
+
+#### 反馈的三个档位
+
+`PreToolUse` 的输出不止 allow/deny。文档里这个事件支持四个字段，其中两个以前没用上：
+
+| 字段 | 用在 | 成本 |
+|---|---|---|
+| `permissionDecision` + `permissionDecisionReason` | 硬闸 | **一个完整来回** |
+| `additionalContext` | 软提示，挂在 tool result 旁边 | 零 |
+| `updatedInput` | 执行前直接改 payload | 零 |
+
+分界线只有一条：**用户会不会因此答不了这道题。**
+
+```
+deny        用户拿不到作答依据        选项 <3 / >4 · 面板两格全空 · 面板半填 · payload 没解析
+提示        用户答得了，但可以更好    推荐项没排第一 · 单条 preview >400 · 合计 >1000 · 两次小提问挨太近
+自动修      纯机械、无损             推荐项重排到第一 · 删掉多选里不渲染的 preview
+```
+
+**软提示刻意不带 `permissionDecision`。** 这个 hook 的 matcher 上同时挂着 `Bash` / `Write` / `Edit`，显式发一个 `allow` 会顺手接管权限流程，把本该弹确认的操作直接放行。只发 `additionalContext`，权限流程原样不动。
+
+**每次调用最多附一条提示。** 按「自动修 → 质量 → 批次」取第一条命中的。一次塞四条就没人读了，而软提示的全部价值在于被读到。
+
+**自动修只做无损的两件事。** 超长 preview 也是 22 次 payload 解析失败的根因，但截断会静默砍掉用户本该读到的正文——为省一个来回丢用户看得见的信息，方向是反的。超长走提示档。
+
+**这套档位的来处是一次成本测量。** 三周 739 次 `AskUserQuestion`、1036 道题：
+
+```
+平均装载       1.44 题/次（工具上限 4）—— 1036 道题装成 717 次调用，
+                装满只需 259 次，差额 458 次全是多出来的打断
+单次墙钟       中位 66s · p75 145s · p90 301s，合计 35.4 小时
+回答形态       干净点选 70% · 弃选打字 16% · 拒答打断 9% · 被 hook 拒 3%
+相邻间隔       40% 的提问发生在上一题答完 5 分钟内
+```
+
+`deny` 是这张表里唯一按次收费的东西，而它当时是唯一的反馈手段。三个档位就是为了把「纠正」和「阻断」拆开。
+
+批次提示的两个阈值都从这张表来：5 分钟窗口对着那 40%，`≤2 题` 对着 1.44 的装载率——3~4 题的批次本来就装得差不多，不该被提醒。它的措辞是问句而不是指责，因为 R6 规定答完重头题要重估、新问题合法冒出，那种情况下连着问是对的。
+
+**批次状态不落在 `.qna/` 里。** 校验器在每个项目跑，包括从没用过这个插件的，而「没用过的项目跑完一个会话必须一个文件都不多」是有断言守着的。所以它落在 `<tmp>/qna-ask/<session>.json`——生命周期天然对齐 session，重启即清，项目目录零痕迹。
 
 #### 作用域：全会话，不分场合
 
 **原设计限定在 `/qna:ask` 内**，靠一个 `.qna/<sid>.active` 标记文件开关，理由是「这些规则适合清理积压，对日常对话过于死板」。
 
-**实测推翻了它。** 某会话 49 次提问、`/qna:ask` 从未调用，其中 3 道单选题**全部没有 preview**——R4 在命令之外的合规率是 0%。而比例是反的：`/qna:ask` 一天跑几次，普通提问一天几十次。**把最严的规则只用在最少的场合，等于没有规则。**
+**实测推翻了它。** 三周的 transcript 里，因「选项少于 3 个」被拒的 7 道题中，6 道问在命令之外。而比例是反的：`/qna:ask` 一天跑几次，普通提问一天几十次。**把最严的规则只用在最少的场合，等于没有规则。**
 
 于是校验器改为无条件生效，`qna-mark` 脚本、`.active` 标记、`/qna:ask` 的开关两步一并删除——标记的唯一职责就是划这个作用域，作用域没了它就是死代码。
 
@@ -340,24 +478,50 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
 
 **顺带消掉一条静默失效路径。** 标记时代最贵的失败模式是：写标记的是模型跑的 shell（那里**没有** `CLAUDE_PROJECT_DIR`，路径必然回落到当次工作目录），读标记的是 hook（用自己 payload 里的 `cwd`）。两边各自理解「当前目录」，会话起在子目录或中途 `cd` 就错位——而**找不到标记 = 判定 `/qna:ask` 没在跑 = 全部放行**，硬闸整程失效且毫无提示。校验器不再依赖任何磁盘状态，这个口子从根上不存在了。
 
+#### preview：从「必须有」改成「面板不许空」
+
+这条闸门换过一次口径，理由全在数字里。
+
+**第一版要求每个单选选项都带 `preview`，而它管用。** 同一个三周窗口：hook 装上之前 613 道单选题里只有 68 道全带 preview（11%），装上之后 384 道里有 342 道（89%）。这个八倍的差距说明覆盖率不是自然形成的，是闸门顶出来的——直接删掉校验就是退回 11%。
+
+**它也贵。** 同一把尺子会拒掉 **58.9%** 的提问，而每一次拒绝是一个完整来回。`AskUserQuestion` 本身就慢，这个插件的立意是省用户的时间，拒绝在这里是反向的：四天内 20 次 preview 拒绝，16 次发生在 `/qna:ask` 之外，被拒后补写的 preview 合计 27,425 字符、中位数 1,089。
+
+**更糟的是它逼出假货。**「没东西可放不是一种情况，是一个信号」这句话把模型推向编造：`分支名 · restart / v2 / blank-slate` 被拒之后交出三段 `git branch` 输出，唯一的差别是星号在哪一行。
+
+**于是要求挪到伤害真正所在的地方。** `preview` 与 `description` 是同一个面板的两个抽屉，闸门改查这一格空不空，而不是查 `preview` 在不在；顺带补上一条从来没人管过的情形——半填的面板。把三周里 1034 道真实提问按 shipped 的判定顺序回放一遍：
+
+```
+面板相关的拒绝     旧口径 31.6%  ->  新口径 2.7%
+hook 生效后那四天  旧口径  9.5%  ->  新口径 2.2%
+
+选项数拦截的 30.1% 两套口径完全一样，不计入这个对比
+```
+
+而放行的每一道题仍然说了 label 之外的东西。
+
+> 口径说明：这是拿规则回放算出来的，不等于当时实际发出的拒绝次数——有些会话根本没装插件。判定顺序跟 shipped 代码一致：选项数先拦，拦下的不再进面板检查。
+
+**一并否掉的方案：按批量大小免检。** 曾设想"一次调用里 ≥2 题就算轻问题批次，整批免查"。数据不支持：一次调用含 1 / 2 / 3 / 4 题时，preview 覆盖率分别是 38% / 41% / 41% / 52%，几乎是平的。批量大小不是轻重的代理。
+
 ### 依赖的内置工具
 
 | 工具 | 用在哪 |
 |---|---|
 | `AskUserQuestion` | 全部提问。`preview` 用于格式/结构类选项 |
-| `Bash` | 调 `qna-add` / `qna-resolve` / `qna-scan` |
-| `Read` | `/qna:ask` 读 pending 文件 |
+| `Bash` | 调全部 `qna-*` 脚本 |
 
-扫描侧不用 `Read` 读 transcript：3 MB 的文件读不进来，`qna-scan` 过滤加开窗之后才是可读的量。
+`Read` 不在表里：`.qna/` 下的文件由 `PreToolUse` 一律拦掉，读也走 `qna-list`。理由见下节末。
+
+扫描侧同理不用 `Read` 读 transcript：3 MB 的文件读不进来，`qna-scan` 过滤加开窗之后才是可读的量。
 
 ### 存储
 
-`<项目>/.qna/<session_id>.md`，append-only，按项目 + session 双重隔离。
+`<项目>/.qna/<session_id>.md`，按项目 + session 双重隔离。写入只追加，删除只发生在 `/qna:ask` 收尾的 `qna-prune` 那一次。
 
 **目录懒建**：只有 `qna-add` 记进第一条、或 `qna-scan --mark` 推水位线时才建 `.qna/`。三个 hook 一律先看目录在不在，不在就不碰磁盘——它们在每个项目都跑，没这条纪律就会把空目录撒得到处都是。
 
 ```markdown
-<!-- qna-pending · written by qna-add / qna-resolve · cleared by /qna:ask -->
+<!-- qna-pending · written by qna-add · closed by qna-resolve / qna-drop · cleared by qna-prune · read with qna-list -->
 
 - [ ] #4 · 2026-07-27T19:02 · 缓存后端选型
   - Chose: SQLite
@@ -382,6 +546,46 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
 
 字段名英文，标题与内容跟随对话语言。`SessionStart` 顺手清理**本项目** `.qna/` 下 30 天未修改的孤儿文件。
 
+### 关闭与删除是两步
+
+一条条目的一生有三个状态，每步都由一个脚本推进，模型不碰文件：
+
+```
+qna-add            qna-resolve 用户拍板了（要原话）
+未决 - [ ]   ──→   已关闭 - [x]   ──→   qna-prune 整段删掉
+                   qna-drop    没人会拍板了（moot / trivia，要理由）
+```
+
+拆成两步的理由是成本与时机不同。关闭发生在对话中途、一次一条，写一行就完；删除发生在 `/qna:ask` 收尾、一次清一批。
+
+到删除那一刻，那批条目的 `Result` / `Quote` / `Dropped` 早已写好，`qna-prune` 无需再审任何理由。`- [x]` 存在的那段时间里，条目仍带着"为什么关的"，中途被压缩也读得回来。
+
+**id 水位线落在 `.meta` 的 `max_id`。** 删掉最大号条目后 `max(现存 id) + 1` 会把这个号发给下一条，而旧号还留在对话里、留在之前那行 Stop 播报里、留在模型正准备跑的 `qna-resolve` 命令里。水位线随文件一起消失——队列清空的 session 是真的从 #1 重新开始。
+
+**队列清空则连 `.md` 一起删，但 `.meta` 留着。** `.meta` 装的是 session 记账：扫描水位线、transcript 路径、最后播报的 id——不是队列内容。
+
+`qna-prune` 跑在 `/qna:ask` 收尾、扫描水位线刚推过去的几秒后，跟着删就等于把整段对话还给下一次扫描重读。清它的是 30 天孤儿扫。
+
+### `.qna/` 归脚本所有
+
+```
+PreToolUse 守卫
+
+  Read / Edit / Write / MultiEdit   路径命中 .qna/
+                                    -> deny，文案附本 session 填好的四条命令行
+  Bash    命令里出现 .qna/ 路径      -> deny
+  Bash    rm|mv|cp|truncate 指向该目录
+                                    -> deny
+  Bash    只是提到 ".qna" 三个字     -> 放行（grep 本插件源码就是这样）
+  其他工具 / 其他路径                -> 放行
+```
+
+理由和 `qna-add` 那些拒绝是同一条：**门槛写在脚本里才叫门槛**。手改一次 Edit 就绕过了两个备选、绕过了原话校验；手删一条条目连"为什么关的"一起带走——这是全流程唯一没人能事后复核的操作。
+
+读也一样要管：文件里躺着已关闭条目，漏跳一个 `- [x]` 就等于把用户已经答过的问题再问一遍。
+
+Bash 侧刻意收窄到路径与破坏性动词，不拦"提到"——否则这个插件自己没法开发。真要看原始字节，`qna-list --raw` 是留好的口子。
+
 ---
 
 ## 六 · 架构
@@ -392,8 +596,9 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
        +--> 定锚 find_session_dir(cwd, sid)  已有文件在哪就用哪
        +--> 写 .qna/<session_id>.meta   存 transcript_path
        +--> 注入 三条记录协议 + 当前悬置清单(带 id)
-       +--> 注入 四条命令，每条都带绝对 --project
-            QNA_ADD / QNA_RESOLVE / QNA_SCAN / QNA_FILE
+       +--> 注入 六条命令，每条都带绝对 --project
+            QNA_ADD / QNA_RESOLVE / QNA_SCAN
+            QNA_LIST / QNA_DROP / QNA_PRUNE
        |
        v
   ==================  主会话干活中  ==================
@@ -420,7 +625,7 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
   ==============  你敲 /qna:ask  ==========|=====================
                                           |
               |                           |
-              |        读文件 <-----------+
+              |     qna-list <------------+   只打未决，已关闭的它自己滤掉
               |           |
               |  扫对话 --+     五类来源，含"我散文里提过但没做成题"的
               |           |
@@ -450,11 +655,17 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
               |           |              +--- options > 4      -> deny
               |           |              +--- 单选无 preview   -> deny
               |           v
-              |      决策清单 --> 停
+              |      决策清单 --> 干活 --> 停
               |           |
               |           +--> R6 新冒出的仍未定项 --> qna-add
               v
-       $QNA_SCAN --mark                   推进水位线，最后一步
+         清理，收尾唯一动到文件的一步
+              ├─ 用户拍板的      --> qna-resolve  (--quote)
+              ├─ 没人会拍板的    --> qna-drop     (moot | trivia + --why)
+              ├─ 范围闸漏掉的    --> 不动，留在队列
+              └─ 全部标完        --> qna-prune    整批删掉 [x]
+
+         (水位线在扫描那步就推过了，这里不再动 --mark)
 
   ══════════  每轮 turn 前后  ══════════
        用户发出 prompt --> 本会话一条没记过？
@@ -477,7 +688,7 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
   代码保证 |  记录侧  文件路径 · 时间戳 · session 隔离 · 必填字段
   (脚本    |          落点可验证（代码存在 或 原话确实说过）
    + hook) |          alt 数量下限 · 归档必须带 quote
-           |  提问侧  单选 3~4 个 · 多选 >= 2 个 · preview 必须存在
+           |  提问侧  单选 3~4 个 · 多选 >= 2 个 · 面板不空也不半填
            |          入参解析失败（__unparsedToolInput）直接拒
            |          （PreToolUse 校验器，全会话恒生效）
            |  落盘位置  锚点由 SessionStart 定、注入进每条命令
@@ -504,14 +715,17 @@ PreToolUse   matcher: AskUserQuestion       ← 每个会话、每一次提问
 |---|---|
 | `/qna:ask` | 唯一命令 |
 | `qna-add` | 记一条未决 |
-| `qna-resolve` | 结一条 |
+| `qna-resolve` | 结一条：用户拍板了 |
+| `qna-drop` | 结一条：没人会拍板了 |
+| `qna-prune` | 整批删掉已关闭的 |
+| `qna-list` | 打印未决队列（唯一的读法）|
 | `qna-transcript` | `--where` 原话校验 |
 | `qna-scan` | 扫描窗口 + 水位线 |
 | `SessionStart` hook | 注协议 · 注命令 · 列悬置 |
 | `UserPromptSubmit` hook | 每 15 轮复推（不渲染）|
 | `Stop` hook | 新条目播报（唯一渲染给用户的）|
-| `PreToolUse` 校验器 | 卡住每一次 `AskUserQuestion` |
-| `tests/smoke.sh` | 120 条断言 |
+| `PreToolUse` 校验器 | 卡住每一次 `AskUserQuestion`；挡住每一次直接动 `.qna/` |
+| `tests/smoke.sh` | 170 条断言 |
 
 不装：transcript 的 compact 恢复 · 相似度去重 · 12 条上限 · 孤儿清理以外的维护逻辑
 
@@ -598,7 +812,7 @@ S3 与第 5 类来源看似冲突，判据是：**那段散文里有没有真实
 
 **位置**：总览之后、第一道实质问题之前。总览提供的数字正是这道题的作答依据。
 
-**题目形态**（本身也遵守 R2/R4，≥3 选项、带 preview、单选）：
+**题目形态**（本身也遵守 R2/R4，≥3 选项、单选，各档覆盖哪些条目正是面板该展示的东西）：
 
 ```
 现在有 11 条待拍板 —— 4 条是刚才这轮产生的，7 条是之前积压的。
@@ -640,9 +854,13 @@ S3 与第 5 类来源看似冲突，判据是：**那段散文里有没有真实
   R1  超过 4 题分批连发            绝不退回 markdown 列表        <- 核心
   R2  单选下限 3 · 多选下限 2      上限 4 · 禁是非题 · 不凑数
       重头题末位留「我没看懂这题」   唯一豁免「必须是做法」的选项
+      label 沿同一维度取值          约 11 字符 · 过 20 就扫不动
+      有倾向必标推荐并排第一        没倾向一个不标 · 偏好题不标
   R3  选项自解释                   专有名词要说清它是什么
-  R4  所有单选题必须带 preview     并排展示实物 · 默认 single-select
+  R4  选项背后的面板不许空          preview 供看 · description 供读
+      差异有变化才放 preview        同构 · 变化对齐 · 锚要短 · 全填或全不填
   R5  重头题先解释再问             同一轮 · 紧贴题目上方 · 约一屏
+      解释与面板分账不叠加          两边都想写长 = 该拆成两道题
       批次之间不写过程叙述          禁复盘 / 重估小作文 / 「接下来」
   R6  每答完重头题重估剩余         失效的划掉 · 变形的重写 · 新增的补上
   R7  一切提问走 AskUserQuestion   不得以散文形式提出
@@ -835,7 +1053,7 @@ Resolved #3.
 
 ### 触发过一次 compact
 
-`SessionStart` 以 `compact` matcher 重跑，`session_id` 不变 → 协议、四条注入命令、悬置清单（带 id）重新注入，`.meta` 里的 `transcript_path` 也刷新。压缩前记的一条没丢。锚点由 `find_session_dir` 重新定位到既有文件所在目录，即使这期间工作目录变过也不会分叉出第二个 `.qna/`。
+`SessionStart` 以 `compact` matcher 重跑，`session_id` 不变 → 协议、六条注入命令、悬置清单（带 id）重新注入，`.meta` 里的 `transcript_path` 也刷新。压缩前记的一条没丢。锚点由 `find_session_dir` 重新定位到既有文件所在目录，即使这期间工作目录变过也不会分叉出第二个 `.qna/`。
 
 ### 你敲 `/qna:ask`
 
@@ -975,15 +1193,18 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 │       ├── session-start.py    定锚 · 注入协议+命令+清单 · 写 .meta · 清孤儿
 │       ├── prompt-nudge.py     每 15 轮复推：没记过 / 记了没结（都不渲染）
 │       ├── stop-count.py       新条目播报（唯一会渲染给用户的输出）
-│       ├── pre-tool-use.py     校验 AskUserQuestion 入参
+│       ├── pre-tool-use.py     校验 AskUserQuestion 入参 · 挡住直接动 .qna/
 │       ├── qna-add
-│       ├── qna-resolve
+│       ├── qna-resolve         结一条：用户拍板了（--quote）
+│       ├── qna-drop            结一条：没人会拍板了（--reason + --why）
+│       ├── qna-prune           整批删掉已关闭的
+│       ├── qna-list            打印未决队列（唯一的读法）
 │       ├── qna-transcript      原话校验器（--where）
 │       └── qna-scan            扫描窗口：过滤 + 水位线
 ├── specs/
 │   └── design.md               本文档
 ├── tests/
-│   └── smoke.sh                120 条断言，无依赖
+│   └── smoke.sh                170 条断言，无依赖
 ├── reinstall.sh                卸载·清缓存·重装·校验（curl 一条即可装）
 └── README.md
 ```
@@ -1009,7 +1230,7 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
                     "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/stop-count.py" }] }
     ],
     "PreToolUse": [
-      { "matcher": "AskUserQuestion",
+      { "matcher": "AskUserQuestion|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|Bash",
         "hooks": [{ "type": "command",
                     "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/pre-tool-use.py" }] }
     ]
@@ -1057,11 +1278,16 @@ deny: Refused: 2 options is a yes/no question. R2 requires >= 3.
 SessionStart 定锚一次:  find_session_dir(payload.cwd, sid)
                         已有该 session 文件的目录优先，否则用 cwd
 
-注入四条，每条都带绝对 --project:
+注入六条，每条都带绝对 --project:
   QNA_ADD      记录（并带 --transcript）
-  QNA_RESOLVE  归档
+  QNA_RESOLVE  结一条：用户拍板了
   QNA_SCAN     扫描窗口 + 水位线（并带 --transcript）
-  QNA_FILE     pending 文件的绝对路径，供 Read
+  QNA_LIST     打印未决队列（取代原先注入的 QNA_FILE 路径）
+  QNA_DROP     结一条：没人会拍板了
+  QNA_PRUNE    整批删掉已关闭的
+
+不再注入 pending 文件路径。给出路径就等于给出一次 Read，而 Read 已经被拦；
+读法只有 QNA_LIST 一条。
 
 hook 读侧:  find_session_dir 按 session id 逐级向上找
             文件名带 session id → 命中即证明是对的目录

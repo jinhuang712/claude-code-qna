@@ -113,4 +113,4 @@ fi
 claude plugin list 2>/dev/null | grep -i "${NAME}" || warn "plugin list 里没看到 ${NAME}，安装可能失败"
 
 printf '\n\033[1;32m✔ 完成。\033[0m 改动只在\033[1m新会话\033[0m生效——当前会话仍跑旧缓存，请重开 Claude Code。\n'
-printf '   验证：新会话里看有没有注入 QNA_ADD / QNA_RESOLVE / QNA_SCAN / QNA_FILE 四个名字，然后跑 \033[1m/qna:ask\033[0m。\n'
+printf '   验证：新会话里看有没有注入 QNA_ADD / QNA_RESOLVE / QNA_SCAN / QNA_LIST / QNA_DROP / QNA_PRUNE 六个名字，然后跑 \033[1m/qna:ask\033[0m。\n'

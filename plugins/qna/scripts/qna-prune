@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Clear closed entries out of the pending file.
+
+    qna-prune --session <id> [--project <dir>] [--dry-run]
+
+Closing an entry and removing it are separate acts on purpose. qna-resolve and
+qna-drop run mid-conversation, one item at a time, and each leaves a ticked
+entry with its reason attached — cheap to write, and still readable if the next
+thing that happens is a compaction. This runs once at the end of /qna:ask and
+takes every ticked entry out in one pass.
+
+It asks for no justification. There is nothing left to justify: every entry it
+removes already carries a Result and a Quote, or a Dropped line saying why. The
+scripts that wrote those lines are where the gates live.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qna_lib  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--project")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    path = qna_lib.pending_path(args.session, args.project, create=False)
+    preamble, blocks = qna_lib.read_blocks(path)
+    if not blocks:
+        print("Nothing parked in this session.")
+        return 0
+
+    closed = [b for b in blocks if b["done"]]
+    kept = [b for b in blocks if not b["done"]]
+    if not closed:
+        print(f"Nothing closed to prune. {len(kept)} still open.")
+        return 0
+
+    removed = ", ".join(f"#{b['id']}" for b in closed)
+    if args.dry_run:
+        print(f"Would prune {removed}, leaving {len(kept)} open.")
+        return 0
+
+    # The id watermark has to be written before the ids leave the file, or the
+    # next entry silently reuses a number that is still sitting in the
+    # conversation, in an earlier Stop line, and in whatever qna-resolve command
+    # was about to be run against it.
+    meta = qna_lib.load_meta(args.session, args.project)
+    try:
+        meta["max_id"] = max(
+            [b["id"] for b in blocks] + [int(meta.get("max_id") or 0)]
+        )
+    except (TypeError, ValueError):
+        meta["max_id"] = max(b["id"] for b in blocks)
+    try:
+        qna_lib.save_meta(args.session, meta, args.project)
+    except OSError:
+        pass  # Worst case one id gets reused. Not worth failing the prune.
+
+    if kept:
+        qna_lib.write_blocks(path, preamble, kept)
+        print(f"Pruned {removed}. {len(kept)} still open.")
+        return 0
+
+    # Nothing open left: the file is the queue, and an empty queue is no file.
+    #
+    # .meta stays. It is session bookkeeping, not queue content — the scan
+    # watermark, the transcript path, the last id announced — and this script
+    # runs at the end of /qna:ask, moments after that watermark was advanced.
+    # Deleting it there would hand the next scan the whole conversation to read
+    # again, which is precisely what the watermark exists to prevent. The 30-day
+    # orphan sweep is what eventually clears it.
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    print(f"Pruned {removed}. Nothing left open — removed the file.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

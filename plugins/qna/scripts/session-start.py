@@ -37,9 +37,11 @@ call time may not be the one the hooks read.
   QNA_ADD     = {add}
   QNA_RESOLVE = {resolve}
   QNA_SCAN    = {scan}
-  QNA_FILE    = {pending}
+  QNA_LIST    = {list}
+  QNA_DROP    = {drop}
+  QNA_PRUNE   = {prune}
 
-**Those four names are labels in this text, not shell variables.** Nothing
+**Those six names are labels in this text, not shell variables.** Nothing
 exports them: a hook cannot set the environment of the shell you run commands
 in, and that shell keeps no state between calls. `$QNA_ADD --title x` therefore
 expands to `--title x` and fails with "command not found" — which is not a
@@ -47,8 +49,15 @@ refusal and must not be worked around. Paste the full line instead. Every
 example below already has it filled in.
 
 QNA_ADD and QNA_RESOLVE are the two you use while working. QNA_SCAN prints the
-conversation not yet scanned and QNA_FILE is a path to Read; both belong to
-/qna:ask alone — ignore them otherwise.
+conversation not yet scanned, QNA_LIST prints what is parked, QNA_DROP discards
+an item nobody will ever rule on and QNA_PRUNE clears closed ones out of the
+file; those four belong to /qna:ask alone — ignore them otherwise.
+
+**The `.qna/` files themselves are off limits.** Read, Edit, Write and any Bash
+command naming a path inside them are refused by a hook. Everything you need is
+above: QNA_LIST reads, QNA_RESOLVE and QNA_DROP close, QNA_PRUNE removes. The
+gates in those scripts are the whole point of the tool, and a hand edit walks
+around every one of them.
 
 ### 1. You decided something the user has not signed off on
 
@@ -177,7 +186,9 @@ def main():
         add=cmd("qna-add", transcript_too=True),
         resolve=cmd("qna-resolve"),
         scan=cmd("qna-scan", transcript_too=True),
-        pending=qna_lib.pending_path(session, project, create=False),
+        list=cmd("qna-list"),
+        drop=cmd("qna-drop"),
+        prune=cmd("qna-prune"),
     )
 
     open_items = qna_lib.open_entries(
@@ -202,8 +213,8 @@ def main():
             f"\n### Still open here from an earlier session ({len(entries)})\n\n"
             f"{listing}\n\n"
             f"These belong to session {sid}, so their numbers are that file's, "
-            f"not this one's. Read them in full at:\n"
-            f"  {qna_lib.pending_path(sid, project, create=False)}\n\n"
+            f"not this one's. Print them in full with that session's own line:\n"
+            f"  {cmd_for('qna-list', sid)}\n\n"
             f"Settle one with that session's own line — same command, its id:\n"
             f"  {cmd_for('qna-resolve', sid)} <id> "
             f"--result <what was decided> --quote <the user's own words>\n\n"

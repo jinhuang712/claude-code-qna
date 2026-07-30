@@ -6,19 +6,40 @@ Storage layout, per project:
                                        directory (including itself) is invisible
                                        to git without touching the project's
                                        own .gitignore
-    <project>/.qna/<session>.md        pending entries, append-only
+    <project>/.qna/<session>.md        pending entries, append-only until
+                                       qna-prune removes the closed ones
     <project>/.qna/<session>.meta      json: transcript_path, last reported
-                                       count, and the scan watermark
+                                       count, the scan watermark, and the
+                                       highest id ever handed out here
+
+Nothing outside these scripts touches those files. Reading goes through
+qna-list, closing through qna-resolve or qna-drop, removal through qna-prune,
+and a PreToolUse hook refuses the model's own Read/Edit/Write/Bash on them. The
+file is a data structure with rules attached — an id sequence, a checkbox state
+machine, fields other scripts parse — and a free-hand edit breaks those quietly,
+which is the failure mode this layout is arranged to prevent.
+
+One piece of state deliberately lives nowhere near a project:
+
+    <tmp>/qna-ask/<session>.json       when this session last asked a question,
+                                       and how many it carried
+
+The validator runs on every AskUserQuestion in every project, including ones
+that have never recorded a thing, and those must come out of a session with
+nothing added to them — there is a test asserting exactly that. So this cannot
+go in .qna/. A temp file is also the right lifetime: the question is always
+"how long since the last one in this session", never "what happened last week".
 """
 
 import json
 import os
 import re
+import tempfile
 import time
 
 HEADER = (
-    "<!-- qna-pending · written by qna-add / qna-resolve "
-    "· cleared by /qna:ask -->\n"
+    "<!-- qna-pending · written by qna-add · closed by qna-resolve / qna-drop "
+    "· cleared by qna-prune · read with qna-list -->\n"
 )
 
 # "- [ ] #4 · 2026-07-27T19:02 · Title"
@@ -162,9 +183,93 @@ def other_session_entries(session, project=None):
     return out
 
 
-def next_id(path):
+def read_blocks(path):
+    """Split the pending file into (preamble, blocks), text preserved.
+
+    read_entries answers "what is parked here". This answers "which lines is it
+    made of", which is what the reading side needs to print one entry verbatim
+    and qna-prune needs to remove one without reflowing its neighbours.
+
+    Each block is {"done", "id", "title", "lines"}; trailing blank lines are
+    stripped from every block and from the preamble, and write_blocks puts the
+    single separating blank line back. Round-tripping a file no script has
+    touched leaves it byte-identical.
+    """
+    if not os.path.exists(path):
+        return [], []
+    lines = open(path, encoding="utf-8").read().split("\n")
+    preamble, blocks = [], []
+    for line in lines:
+        m = ENTRY_RE.match(line)
+        if m:
+            blocks.append(
+                {
+                    "done": m.group(1) == "x",
+                    "id": int(m.group(2)),
+                    "title": m.group(4),
+                    "lines": [line],
+                }
+            )
+        elif blocks:
+            blocks[-1]["lines"].append(line)
+        else:
+            preamble.append(line)
+
+    def trim(seq):
+        while seq and not seq[-1].strip():
+            seq.pop()
+
+    trim(preamble)
+    for b in blocks:
+        trim(b["lines"])
+    return preamble, blocks
+
+
+def write_blocks(path, preamble, blocks):
+    out = list(preamble) or [HEADER.rstrip("\n")]
+    for b in blocks:
+        out.append("")
+        out.extend(b["lines"])
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
+def close_entry(path, entry_id, fields):
+    """Tick one entry's checkbox and attach fields to it.
+
+    Both ways an entry can close come through here — qna-resolve with the user's
+    words, qna-drop with a reason — so the checkbox and the field layout have one
+    implementation rather than two that drift.
+    """
+    preamble, blocks = read_blocks(path)
+    for b in blocks:
+        if b["id"] != entry_id:
+            continue
+        b["lines"][0] = b["lines"][0].replace("- [ ] ", "- [x] ", 1)
+        b["lines"].extend(f"  - {k}: {v}" for k, v in fields)
+        write_blocks(path, preamble, blocks)
+        return True
+    return False
+
+
+def next_id(path, session=None, project=None):
+    """One past the highest id ever handed out in this file.
+
+    The file alone stopped being enough when qna-prune arrived: pruning the
+    highest-numbered entry would otherwise hand its number to the next one, and
+    the old number is still sitting in the conversation, in an earlier Stop line,
+    and in whatever qna-resolve command the model was about to run. So the
+    watermark outlives the entries, in .meta. It goes away with the file itself —
+    a session with nothing parked is genuinely starting over at #1.
+    """
     entries = read_entries(path)
-    return max((e["id"] for e in entries), default=0) + 1
+    floor = 0
+    if session:
+        try:
+            floor = int(load_meta(session, project).get("max_id") or 0)
+        except (TypeError, ValueError):
+            floor = 0
+    return max(max((e["id"] for e in entries), default=0), floor) + 1
 
 
 def render_entry(entry_id, title, chose, alts, why, where, source, verified):
@@ -202,6 +307,39 @@ def load_meta(session, project=None):
 def save_meta(session, data, project=None):
     with open(meta_path(session, project), "w", encoding="utf-8") as f:
         json.dump(data, f)
+
+
+def ask_state_path(session):
+    """Where this session's last-question timestamp lives — outside any project.
+
+    See the note at the top of this file: the validator fires in projects that
+    have never used the tool, and leaving a file behind in one of those is the
+    bug the no-trace test guards.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", session or "unknown")
+    return os.path.join(tempfile.gettempdir(), "qna-ask", f"{safe}.json")
+
+
+def load_ask_state(session):
+    try:
+        with open(ask_state_path(session), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        # Missing, unreadable or cleaned up by the OS all mean the same thing —
+        # there is no previous question to compare against. Degrading to "first
+        # question of the session" is correct and has no side effect.
+        return {}
+
+
+def save_ask_state(session, data):
+    p = ask_state_path(session)
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        # Bookkeeping for a hint. Never let it break the question.
+        pass
 
 
 def iter_turns(path):

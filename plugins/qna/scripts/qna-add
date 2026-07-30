@@ -131,7 +131,7 @@ def main():
     )
 
     path = qna_lib.pending_path(args.session, args.project)
-    entry_id = qna_lib.next_id(path)
+    entry_id = qna_lib.next_id(path, args.session, args.project)
     qna_lib.append_entry(
         path,
         qna_lib.render_entry(

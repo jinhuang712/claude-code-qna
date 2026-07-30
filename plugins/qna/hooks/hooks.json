@@ -33,7 +33,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "AskUserQuestion",
+        "matcher": "AskUserQuestion|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|Bash",
         "hooks": [
           {
             "type": "command",
